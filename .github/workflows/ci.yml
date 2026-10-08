@@ -1,0 +1,35 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        run: npm install --prefix frontend
+
+      - name: Install backend dependencies
+        run: npm install --prefix backend
+
+      - name: Build frontend
+        run: npm run build --prefix frontend
+
+      - name: Run backend tests
+        run: npm test --prefix backend
+
+      - name: Validate Docker compose
+        run: docker compose config
