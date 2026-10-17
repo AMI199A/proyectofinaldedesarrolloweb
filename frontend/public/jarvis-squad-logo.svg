@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Jarvis Squad</title>
+  <defs>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7af4ff"/>
+      <stop offset="1" stop-color="#079cff"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <circle cx="256" cy="256" r="236" fill="#061321" fill-opacity=".92" stroke="#0872ae" stroke-opacity=".65" stroke-width="2"/>
+  <circle cx="256" cy="256" r="218" fill="none" stroke="url(#cyan)" stroke-width="5" stroke-dasharray="265 14 84 18 144 24" filter="url(#glow)"/>
+  <circle cx="256" cy="256" r="198" fill="none" stroke="#16b8ff" stroke-opacity=".76" stroke-width="2" stroke-dasharray="3 8"/>
+  <circle cx="256" cy="256" r="172" fill="none" stroke="#0a7fc5" stroke-opacity=".6" stroke-width="2"/>
+  <path d="M256 62v58M256 392v58M62 256h58M392 256h58M119 119l40 40M353 353l40 40M393 119l-40 40M159 353l-40 40" stroke="#12baff" stroke-opacity=".62" stroke-width="2"/>
+  <path d="M87 169h45M380 343h45M343 87v38M169 387v38" stroke="#ffb94f" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="133" fill="#04111d" fill-opacity=".88" stroke="#08a9f0" stroke-opacity=".72" stroke-width="2"/>
+  <text x="256" y="252" fill="#f4fbff" filter="url(#glow)" font-family="Arial, Helvetica, sans-serif" font-size="64" font-weight="800" text-anchor="middle" letter-spacing="1">JARVIS</text>
+  <path d="M115 282h72M325 282h72" stroke="#12d9ff" stroke-width="4"/>
+  <text x="256" y="322" fill="#39eaff" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" text-anchor="middle" letter-spacing="10">SQUAD</text>
+  <circle cx="256" cy="256" r="7" fill="#70edff" filter="url(#glow)"/>
+</svg>

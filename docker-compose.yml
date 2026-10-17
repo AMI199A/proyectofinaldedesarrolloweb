@@ -1,0 +1,57 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: clima_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: clima_app
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: clima_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/clima_app
+      JWT_SECRET: supersecretkey
+      OPENWEATHER_BASE_URL: https://api.open-meteo.com/v1
+    depends_on:
+      - db
+    ports:
+      - '4000:4000'
+    command: npm run dev
+    volumes:
+      - ./backend:/app
+      - backend_node_modules:/app/node_modules
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: clima_frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: http://localhost:4000/api
+    depends_on:
+      - backend
+    ports:
+      - '5173:5173'
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+
+volumes:
+  postgres_data:
+  backend_node_modules:
+  frontend_node_modules:
