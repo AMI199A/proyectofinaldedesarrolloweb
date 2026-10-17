@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FacebookAuthProvider,
   GoogleAuthProvider,
@@ -659,6 +659,21 @@ function App() {
   const [favorites, setFavorites] = useState([]);
   const [history, setHistory] = useState([]);
   const [alerts, setAlerts] = useState([]);
+  const [activeSection, setActiveSection] = useState('dashboard');
+  const [profile, setProfile] = useState({ name: '', email: '' });
+  const [profileName, setProfileName] = useState('');
+  const [preferences, setPreferences] = useState({
+    autoRefreshSensors: false,
+    sensorRefreshSeconds: 30,
+  });
+  const [deviceId, setDeviceId] = useState('esp32-01');
+  const [deviceClaimCode, setDeviceClaimCode] = useState('');
+  const [sensorReadings, setSensorReadings] = useState([]);
+  const [sensorMessage, setSensorMessage] = useState('');
+  const [sensorLoading, setSensorLoading] = useState(false);
+  const [assistantQuestion, setAssistantQuestion] = useState('');
+  const [assistantAnswer, setAssistantAnswer] = useState('');
+  const [assistantLoading, setAssistantLoading] = useState(false);
   const [activeQuickView, setActiveQuickView] = useState('');
   const [loading, setLoading] = useState(false);
   const [locationSuggestions, setLocationSuggestions] = useState([]);
@@ -674,12 +689,31 @@ function App() {
       setAuthToken(token);
       localStorage.setItem('clima-token', token);
       fetchProtectedData();
+      Promise.all([api.get('/auth/me'), api.get('/auth/preferences')])
+        .then(([profileResponse, preferencesResponse]) => {
+          setProfile(profileResponse.data.user);
+          setProfileName(profileResponse.data.user.name);
+          setPreferences((current) => ({
+            ...current,
+            ...preferencesResponse.data.preferences,
+          }));
+        })
+        .catch((error) => {
+          console.error('Account data error', error);
+          setMessage({
+            type: 'error',
+            text: error.response?.data?.message || 'No se pudo cargar la información de la cuenta.',
+          });
+        });
     } else {
       setAuthToken(null);
       localStorage.removeItem('clima-token');
       setFavorites([]);
       setHistory([]);
       setAlerts([]);
+      setProfile({ name: '', email: '' });
+      setSensorReadings([]);
+      setActiveSection('dashboard');
     }
   }, [token]);
 
@@ -736,6 +770,108 @@ function App() {
       setAlerts(alertsRes.data || []);
     } catch (error) {
       console.error('Protected data error', error);
+    }
+  };
+
+  const refreshSensorReadings = useCallback(async () => {
+    setSensorLoading(true);
+    try {
+      const response = await api.get('/iot/readings', { params: { deviceId } });
+      setSensorReadings(response.data.readings || []);
+      setSensorMessage(response.data.latest
+        ? `Última lectura recibida ${new Intl.DateTimeFormat('es-GT', {
+          dateStyle: 'short',
+          timeStyle: 'medium',
+        }).format(new Date(response.data.latest.recordedAt))}.`
+        : 'Dispositivo vinculado; esperando la primera lectura.');
+    } catch (error) {
+      setSensorMessage(error.response?.data?.message || 'No se pudo consultar la telemetría.');
+    } finally {
+      setSensorLoading(false);
+    }
+  }, [deviceId]);
+
+  useEffect(() => {
+    if (activeSection !== 'iot' || !preferences.autoRefreshSensors) return undefined;
+
+    const timer = window.setInterval(
+      refreshSensorReadings,
+      preferences.sensorRefreshSeconds * 1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [
+    activeSection,
+    preferences.autoRefreshSensors,
+    preferences.sensorRefreshSeconds,
+    refreshSensorReadings,
+  ]);
+
+  const handleClaimDevice = async (event) => {
+    event.preventDefault();
+    setSensorLoading(true);
+    setSensorMessage('');
+    try {
+      await api.post('/iot/devices', { deviceId, claimCode: deviceClaimCode });
+      setDeviceClaimCode('');
+      setSensorMessage('Dispositivo vinculado a tu cuenta.');
+      await refreshSensorReadings();
+    } catch (error) {
+      setSensorMessage(error.response?.data?.message || 'No se pudo vincular el dispositivo.');
+    } finally {
+      setSensorLoading(false);
+    }
+  };
+
+  const handleSaveProfile = async (event) => {
+    event.preventDefault();
+    try {
+      const response = await api.put('/auth/me', { name: profileName });
+      setProfile(response.data.user);
+      setMessage({ type: 'success', text: 'Perfil actualizado.' });
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.message || 'No se pudo actualizar el perfil.',
+      });
+    }
+  };
+
+  const handleSavePreferences = async (event) => {
+    event.preventDefault();
+    try {
+      const response = await api.put('/auth/preferences', preferences);
+      setPreferences(response.data.preferences);
+      setMessage({ type: 'success', text: 'Preferencias guardadas.' });
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.message || 'No se pudieron guardar las preferencias.',
+      });
+    }
+  };
+
+  const handleAskAssistant = async (event) => {
+    event.preventDefault();
+    setAssistantLoading(true);
+    setAssistantAnswer('');
+    try {
+      const response = await api.post('/assistant', {
+        question: assistantQuestion,
+        weather: {
+          location: weather.location.name,
+          temperature: weather.current.temperature,
+          humidity: weather.current.humidity,
+          precipitation: weather.current.precipitation,
+          condition: weather.current.weatherLabel,
+        },
+      });
+      setAssistantAnswer(response.data.answer);
+    } catch (error) {
+      setAssistantAnswer(
+        error.response?.data?.message || 'No se pudo obtener una respuesta de la IA.',
+      );
+    } finally {
+      setAssistantLoading(false);
     }
   };
 
@@ -1117,6 +1253,69 @@ function App() {
         solarPhase={solarPhase}
         hasClouds={hasClouds}
       />
+      <div className="dashboard-layout">
+        <aside className="dashboard-sidebar" aria-label="Navegación principal">
+          <div className="sidebar-brand">
+            <img className="brand-logo" src="/jarvis-squad-logo.svg" alt="" />
+            <div>
+              <span>JARVIS SQUAD</span>
+              <strong>Panel ambiental</strong>
+            </div>
+          </div>
+          <p className="sidebar-label">PANEL</p>
+          <nav className="sidebar-nav" aria-label="Secciones del panel">
+            <button
+              type="button"
+              className={activeSection === 'dashboard' ? 'active' : ''}
+              aria-current={activeSection === 'dashboard' ? 'page' : undefined}
+              onClick={() => setActiveSection('dashboard')}
+            ><span>⌂</span>Dashboard</button>
+            <button
+              type="button"
+              className={activeSection === 'iot' ? 'active' : ''}
+              aria-current={activeSection === 'iot' ? 'page' : undefined}
+              onClick={() => {
+                setActiveSection('iot');
+                refreshSensorReadings();
+              }}
+            ><span>◉</span>ESP32 tiempo real</button>
+            <button
+              type="button"
+              className={activeSection === 'assistant' ? 'active' : ''}
+              aria-current={activeSection === 'assistant' ? 'page' : undefined}
+              onClick={() => setActiveSection('assistant')}
+            ><span>✦</span>Inteligencia artificial</button>
+          </nav>
+          <p className="sidebar-label">CUENTA</p>
+          <nav className="sidebar-nav" aria-label="Opciones de cuenta">
+            <button
+              type="button"
+              className={activeSection === 'profile' ? 'active' : ''}
+              aria-current={activeSection === 'profile' ? 'page' : undefined}
+              onClick={() => setActiveSection('profile')}
+            ><span>◎</span>Mi perfil</button>
+            <button
+              type="button"
+              className={activeSection === 'preferences' ? 'active' : ''}
+              aria-current={activeSection === 'preferences' ? 'page' : undefined}
+              onClick={() => setActiveSection('preferences')}
+            ><span>⚙</span>Preferencias</button>
+            <button
+              type="button"
+              className={activeSection === 'payments' ? 'active' : ''}
+              aria-current={activeSection === 'payments' ? 'page' : undefined}
+              onClick={() => setActiveSection('payments')}
+            ><span>▤</span>Pagos</button>
+          </nav>
+          <div className="sidebar-account">
+            <span className="sidebar-avatar">{(profile.name || 'U').charAt(0).toUpperCase()}</span>
+            <div>
+              <strong>{profile.name || 'Usuario'}</strong>
+              <small>{profile.email}</small>
+            </div>
+          </div>
+        </aside>
+        <div className="dashboard-workspace">
       <header className="topbar">
         <div className="brand-wrap">
           <img className="brand-logo" src="/jarvis-squad-logo.svg" alt="Logo Jarvis Squad" />
@@ -1127,10 +1326,13 @@ function App() {
         </div>
 
         <nav className="dashboard-nav" aria-label="Secciones del panel">
-          <a href="#dashboard-overview">Resumen</a>
-          <a href="#hourly-forecast">Próximas horas</a>
-          <a href="#five-day-forecast">5 días</a>
-          <a href="#dashboard-overview" onClick={() => setActiveQuickView('history')}>Mi actividad</a>
+          <a href="#dashboard-overview" onClick={() => setActiveSection('dashboard')}>Resumen</a>
+          <a href="#hourly-forecast" onClick={() => setActiveSection('dashboard')}>Próximas horas</a>
+          <a href="#five-day-forecast" onClick={() => setActiveSection('dashboard')}>5 días</a>
+          <a href="#dashboard-overview" onClick={() => {
+            setActiveSection('dashboard');
+            setActiveQuickView('history');
+          }}>Mi actividad</a>
         </nav>
 
         <div className="topbar-actions">
@@ -1140,6 +1342,7 @@ function App() {
         </div>
       </header>
 
+      {activeSection === 'dashboard' && (
       <section className="dashboard-metrics" id="dashboard-overview" aria-label="Resumen de uso">
         <article className="usage-stat">
           <span className="metric-icon">📍</span>
@@ -1188,7 +1391,10 @@ function App() {
           </div>
         </button>
       </section>
+      )}
 
+      {activeSection === 'dashboard' ? (
+      <>
       {activeQuickView && (
         <section className="quick-view-panel" id="quick-view-panel" aria-live="polite">
           <div className="quick-view-heading">
@@ -1605,6 +1811,221 @@ function App() {
         </section>
 
       </main>
+      </>
+      ) : (
+        <section className="workspace-panel" aria-live="polite">
+          {activeSection === 'profile' && (
+            <div className="settings-card">
+              <span className="badge">Cuenta</span>
+              <h2>Información del perfil</h2>
+              <p className="settings-intro">Administra el nombre que aparece en tu cuenta de Clima Jarvis Squad.</p>
+              <form className="settings-form" onSubmit={handleSaveProfile}>
+                <label>
+                  Nombre
+                  <input
+                    value={profileName}
+                    onChange={(event) => setProfileName(event.target.value)}
+                    minLength="2"
+                    maxLength="120"
+                    required
+                  />
+                </label>
+                <label>
+                  Correo electrónico
+                  <input value={profile.email} readOnly />
+                </label>
+                <button type="submit" className="primary-btn">Guardar perfil</button>
+                {message.text && <div className={`message ${message.type}`}>{message.text}</div>}
+              </form>
+            </div>
+          )}
+
+          {activeSection === 'preferences' && (
+            <div className="settings-card">
+              <span className="badge">Personalización</span>
+              <h2>Preferencias</h2>
+              <p className="settings-intro">Configura cómo se actualizan las lecturas de tu dispositivo mientras consultas el panel ESP32.</p>
+              <form className="settings-form" onSubmit={handleSavePreferences}>
+                <label className="preference-toggle">
+                  <input
+                    type="checkbox"
+                    checked={preferences.autoRefreshSensors}
+                    onChange={(event) => setPreferences((current) => ({
+                      ...current,
+                      autoRefreshSensors: event.target.checked,
+                    }))}
+                  />
+                  Actualizar lecturas automáticamente cuando el panel ESP32 está abierto
+                </label>
+                <label>
+                  Frecuencia de actualización
+                  <select
+                    value={preferences.sensorRefreshSeconds}
+                    onChange={(event) => setPreferences((current) => ({
+                      ...current,
+                      sensorRefreshSeconds: Number(event.target.value),
+                    }))}
+                  >
+                    <option value={5}>Cada 5 segundos</option>
+                    <option value={10}>Cada 10 segundos</option>
+                    <option value={30}>Cada 30 segundos</option>
+                    <option value={60}>Cada minuto</option>
+                  </select>
+                </label>
+                <button type="submit" className="primary-btn">Guardar preferencias</button>
+                {message.text && <div className={`message ${message.type}`}>{message.text}</div>}
+              </form>
+            </div>
+          )}
+
+          {activeSection === 'payments' && (
+            <div className="settings-card">
+              <span className="badge">Facturación</span>
+              <h2>Pagos y suscripción</h2>
+              <div className="billing-placeholder">
+                <span aria-hidden="true">▤</span>
+                <strong>No hay pagos configurados</strong>
+                <p>Este proyecto no tiene una pasarela de pagos conectada. No se almacenan tarjetas ni datos financieros.</p>
+                <small>La cuenta actual no tiene una suscripción activa.</small>
+              </div>
+            </div>
+          )}
+
+          {activeSection === 'assistant' && (
+            <div className="settings-card assistant-card">
+              <span className="badge badge-soft">Gemini</span>
+              <h2>Asistente de inteligencia artificial</h2>
+              <p className="settings-intro">Pregunta sobre el clima actual. Gemini recibirá los datos meteorológicos de {weather.location.name} para responder con contexto.</p>
+              <form className="assistant-form" onSubmit={handleAskAssistant}>
+                <label>
+                  ¿En qué te puedo ayudar?
+                  <textarea
+                    value={assistantQuestion}
+                    onChange={(event) => setAssistantQuestion(event.target.value)}
+                    placeholder="Ej.: ¿Qué precauciones debo tomar con la humedad y la lluvia actual?"
+                    minLength="2"
+                    maxLength="2000"
+                    required
+                    rows="4"
+                  />
+                </label>
+                <button type="submit" className="primary-btn" disabled={assistantLoading}>
+                  {assistantLoading ? 'Consultando Gemini…' : 'Preguntar a la IA'}
+                </button>
+              </form>
+              {assistantAnswer && (
+                <article className="assistant-answer">
+                  <span className="section-kicker">Respuesta</span>
+                  <p>{assistantAnswer}</p>
+                </article>
+              )}
+            </div>
+          )}
+
+          {activeSection === 'iot' && (
+            <div className="settings-card iot-card">
+              <div className="iot-heading">
+                <div>
+                  <span className="badge">Telemetría IoT</span>
+                  <h2>ESP32 en tiempo real</h2>
+                  <p className="settings-intro">Las lecturas del ESP32 llegan por Node-RED y se guardan en PostgreSQL. Vincula el dispositivo para asociarlo a tu cuenta.</p>
+                </div>
+                <span className="status-chip">● Node-RED</span>
+              </div>
+              <form className="device-form" onSubmit={handleClaimDevice}>
+                <label>
+                  ID del dispositivo
+                  <input
+                    value={deviceId}
+                    onChange={(event) => setDeviceId(event.target.value)}
+                    minLength="2"
+                    maxLength="100"
+                    required
+                  />
+                </label>
+                <label>
+                  Código de vinculación
+                  <input
+                    type="password"
+                    value={deviceClaimCode}
+                    onChange={(event) => setDeviceClaimCode(event.target.value)}
+                    placeholder="Código configurado en el servidor"
+                    required
+                  />
+                </label>
+                <button type="submit" className="secondary-btn" disabled={sensorLoading}>
+                  Vincular dispositivo
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  disabled={sensorLoading}
+                  onClick={refreshSensorReadings}
+                >
+                  {sensorLoading ? 'Consultando…' : 'Actualizar lecturas'}
+                </button>
+              </form>
+              {sensorMessage && <p className="sensor-status" aria-live="polite">{sensorMessage}</p>}
+              {sensorReadings.length > 0 ? (
+                <>
+                  <div className="sensor-metrics">
+                    <article className="mini-metric-card primary">
+                      <span className="metric-icon">🌡️</span>
+                      <div><p>Temperatura ESP32</p><strong>{sensorReadings.at(-1).temperature.toFixed(1)}°C</strong></div>
+                    </article>
+                    <article className="mini-metric-card">
+                      <span className="metric-icon">💧</span>
+                      <div><p>Humedad ESP32</p><strong>{sensorReadings.at(-1).humidity.toFixed(1)}%</strong></div>
+                    </article>
+                    <article className="mini-metric-card">
+                      <span className="metric-icon">🌡</span>
+                      <div><p>Presión atmosférica</p><strong>{sensorReadings.at(-1).pressure === null ? 'N/D' : `${sensorReadings.at(-1).pressure.toFixed(1)} hPa`}</strong></div>
+                    </article>
+                    <article className="mini-metric-card">
+                      <span className="metric-icon">🌧️</span>
+                      <div><p>Precipitación</p><strong>{sensorReadings.at(-1).precipitation === null ? `${weather.current.precipitation} mm · API` : `${sensorReadings.at(-1).precipitation.toFixed(1)} mm`}</strong></div>
+                    </article>
+                  </div>
+                  <div className="sensor-chart">
+                    <div className="section-heading">
+                      <div><span className="section-kicker">Historial reciente</span><h3>Temperatura y humedad</h3></div>
+                      <span className="section-note">Últimas {sensorReadings.length} lecturas</span>
+                    </div>
+                    <div className="sensor-reading-list">
+                      {sensorReadings.slice(-12).reverse().map((reading) => (
+                        <div className="sensor-reading-row" key={reading.id}>
+                          <time>{new Intl.DateTimeFormat('es-GT', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                          }).format(new Date(reading.recordedAt))}</time>
+                          <span className="sensor-reading-temperature">🌡 {reading.temperature.toFixed(1)}°C</span>
+                          <span className="sensor-reading-humidity">💧 {reading.humidity.toFixed(1)}%</span>
+                          <div className="sensor-bar" aria-hidden="true">
+                            <i style={{ width: `${Math.max(4, Math.min(100, reading.humidity))}%` }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="sensor-weather-context">
+                    <span className="section-kicker">Contexto meteorológico · {weather.location.name}</span>
+                    <p>Pronóstico actual: {weather.current.weatherLabel}, {Math.round(weather.current.temperature)}°C, humedad {weather.current.humidity}% y precipitación {weather.current.precipitation} mm. Las métricas del sensor y del servicio meteorológico se muestran por separado.</p>
+                  </div>
+                </>
+              ) : (
+                <div className="billing-placeholder sensor-empty">
+                  <span aria-hidden="true">◉</span>
+                  <strong>Aún no hay lecturas del dispositivo</strong>
+                  <p>Vincula el dispositivo y publica lecturas en <code>http://&lt;IP-DEL-SERVIDOR&gt;:5173/esp32/telemetry</code>. Se mostrarán aquí al consultar o actualizar el panel.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+        </div>
+      </div>
     </div>
   );
 }

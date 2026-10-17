@@ -1,0 +1,80 @@
+[
+  {
+    "id": "iot-http-in",
+    "type": "http in",
+    "z": "iot-flow",
+    "name": "Telemetría ESP32",
+    "url": "/esp32/telemetry",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 180,
+    "y": 120,
+    "wires": [["iot-validate"]]
+  },
+  {
+    "id": "iot-validate",
+    "type": "function",
+    "z": "iot-flow",
+    "name": "Validar y preparar lectura",
+    "func": "const key = env.get('IOT_DEVICE_INGEST_KEY');\nconst body = msg.payload;\nif (!key || msg.req.headers['x-device-key'] !== key) {\n    msg.statusCode = 401;\n    msg.payload = { message: 'Credencial del dispositivo inválida.' };\n    return [null, msg];\n}\nconst validId = typeof body?.deviceId === 'string' && /^[a-zA-Z0-9_-]{2,100}$/.test(body.deviceId);\nconst validTemperature = Number.isFinite(body?.temperature) && body.temperature >= -80 && body.temperature <= 100;\nconst validHumidity = Number.isFinite(body?.humidity) && body.humidity >= 0 && body.humidity <= 100;\nconst validPressure = body?.pressure == null || (Number.isFinite(body.pressure) && body.pressure >= 300 && body.pressure <= 1200);\nconst validRain = body?.precipitation == null || (Number.isFinite(body.precipitation) && body.precipitation >= 0 && body.precipitation <= 10000);\nif (!validId || !validTemperature || !validHumidity || !validPressure || !validRain) {\n    msg.statusCode = 400;\n    msg.payload = { message: 'La lectura de sensores contiene valores no válidos.' };\n    return [null, msg];\n}\nmsg.url = env.get('BACKEND_INGEST_URL');\nmsg.method = 'POST';\nmsg.headers = { 'content-type': 'application/json', 'x-ingest-key': key };\nmsg.payload = {\n    deviceId: body.deviceId,\n    temperature: body.temperature,\n    humidity: body.humidity,\n    pressure: body.pressure ?? null,\n    precipitation: body.precipitation ?? null\n};\nreturn [msg, null];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 410,
+    "y": 120,
+    "wires": [["iot-forward"], ["iot-reject"]]
+  },
+  {
+    "id": "iot-forward",
+    "type": "http request",
+    "z": "iot-flow",
+    "name": "Guardar en API y PostgreSQL",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 690,
+    "y": 100,
+    "wires": [["iot-response"]]
+  },
+  {
+    "id": "iot-response",
+    "type": "http response",
+    "z": "iot-flow",
+    "name": "Responder al ESP32",
+    "statusCode": "",
+    "headers": {},
+    "x": 920,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "iot-reject",
+    "type": "http response",
+    "z": "iot-flow",
+    "name": "Rechazar solicitud",
+    "statusCode": "",
+    "headers": {},
+    "x": 690,
+    "y": 180,
+    "wires": []
+  },
+  {
+    "id": "iot-flow",
+    "type": "tab",
+    "label": "ESP32 -> PostgreSQL",
+    "disabled": false,
+    "info": "Valida la telemetría HTTP del ESP32, la reenvía al backend y devuelve su respuesta."
+  }
+]

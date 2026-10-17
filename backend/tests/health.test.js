@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import jwt from 'jsonwebtoken';
 import request from 'supertest';
 import app from '../src/app.js';
 import weatherService, { buildOpenStreetMapUrl } from '../src/services/weatherService.js';
@@ -7,6 +8,62 @@ import { getWeatherAlert } from '../src/services/weatherAlerts.js';
 
 test('the application exposes the API app object', () => {
   assert.ok(app);
+});
+
+test('protected account, assistant and sensor endpoints require a signed-in user', async () => {
+  const responses = await Promise.all([
+    request(app).get('/api/auth/me'),
+    request(app).get('/api/auth/preferences'),
+    request(app).post('/api/assistant').send({ question: '¿Qué tiempo hará?' }),
+    request(app).get('/api/iot/readings?deviceId=esp32-01'),
+  ]);
+
+  assert.deepEqual(responses.map((response) => response.status), [401, 401, 401, 401]);
+});
+
+test('Gemini reports missing server configuration without making an external request', async () => {
+  const originalApiKey = process.env.GEMINI_API_KEY;
+  delete process.env.GEMINI_API_KEY;
+  const token = jwt.sign(
+    { id: 1, name: 'Test', email: 'test@example.test' },
+    process.env.JWT_SECRET || 'supersecretkey',
+  );
+
+  try {
+    const response = await request(app)
+      .post('/api/assistant')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ question: '¿Qué ropa recomiendas?', weather: { temperature: 20 } });
+
+    assert.equal(response.status, 503);
+    assert.match(response.body.message, /GEMINI_API_KEY/);
+  } finally {
+    if (originalApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = originalApiKey;
+    }
+  }
+});
+
+test('sensor ingestion rejects an incorrect Node-RED credential', async () => {
+  const originalIngestKey = process.env.IOT_DEVICE_INGEST_KEY;
+  process.env.IOT_DEVICE_INGEST_KEY = 'test-ingest-secret';
+
+  try {
+    const response = await request(app)
+      .post('/api/iot/ingest')
+      .set('x-ingest-key', 'incorrect')
+      .send({ deviceId: 'esp32-01', temperature: 20, humidity: 50 });
+
+    assert.equal(response.status, 401);
+  } finally {
+    if (originalIngestKey === undefined) {
+      delete process.env.IOT_DEVICE_INGEST_KEY;
+    } else {
+      process.env.IOT_DEVICE_INGEST_KEY = originalIngestKey;
+    }
+  }
 });
 
 test('weather service includes an OpenStreetMap link for a location', () => {
