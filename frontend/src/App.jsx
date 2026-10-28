@@ -1,24 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  FacebookAuthProvider,
-  GoogleAuthProvider,
-  OAuthProvider,
-  signInWithPopup,
-} from 'firebase/auth';
 import L from 'leaflet';
 import { Circle, MapContainer, Marker, Popup, TileLayer } from 'react-leaflet';
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 import 'leaflet/dist/leaflet.css';
-import api, { setAuthToken } from './api';
-import { firebaseAuth, isFirebaseConfigured } from './firebase';
-
-const initialAuth = {
-  name: '',
-  email: '',
-  password: '',
-};
+import api from './api';
+import { useAuth } from './context/AuthContext';
 
 const getLocationLabel = (location) => [
   location.name,
@@ -624,9 +612,8 @@ function WeatherMap({ location, mapUrl, currentAlert, alerts }) {
 }
 
 function App() {
+  const { authenticated, user, token, loading: authLoading, login, register, logout, hasRole } = useAuth();
   const [authMode, setAuthMode] = useState('login');
-  const [authData, setAuthData] = useState(initialAuth);
-  const [token, setToken] = useState(localStorage.getItem('clima-token') || '');
   const [city, setCity] = useState('Guatemala');
   const [weather, setWeather] = useState({
     location: {
@@ -666,11 +653,10 @@ function App() {
     autoRefreshSensors: false,
     sensorRefreshSeconds: 30,
   });
-  const [deviceId, setDeviceId] = useState('esp32-01');
-  const [deviceClaimCode, setDeviceClaimCode] = useState('');
   const [sensorReadings, setSensorReadings] = useState([]);
-  const [sensorMessage, setSensorMessage] = useState('');
   const [sensorLoading, setSensorLoading] = useState(false);
+  // null = verificando, true = conectado, false = desconectado
+  const [nodeRedConnected, setNodeRedConnected] = useState(null);
   const [assistantQuestion, setAssistantQuestion] = useState('');
   const [assistantAnswer, setAssistantAnswer] = useState('');
   const [assistantLoading, setAssistantLoading] = useState(false);
@@ -685,9 +671,7 @@ function App() {
   const [message, setMessage] = useState({ type: 'info', text: 'Consulta rápida del clima.' });
 
   useEffect(() => {
-    if (token) {
-      setAuthToken(token);
-      localStorage.setItem('clima-token', token);
+    if (authenticated && token) {
       fetchProtectedData();
       Promise.all([api.get('/auth/me'), api.get('/auth/preferences')])
         .then(([profileResponse, preferencesResponse]) => {
@@ -706,8 +690,6 @@ function App() {
           });
         });
     } else {
-      setAuthToken(null);
-      localStorage.removeItem('clima-token');
       setFavorites([]);
       setHistory([]);
       setAlerts([]);
@@ -715,7 +697,7 @@ function App() {
       setSensorReadings([]);
       setActiveSection('dashboard');
     }
-  }, [token]);
+  }, [authenticated, token]);
 
   useEffect(() => {
     const query = city.trim();
@@ -773,29 +755,57 @@ function App() {
     }
   };
 
+  // --- Node Clima: obtener últimas lecturas del ESP32 desde el backend ---
   const refreshSensorReadings = useCallback(async () => {
     setSensorLoading(true);
     try {
-      const response = await api.get('/iot/readings', { params: { deviceId } });
+      const response = await api.get('/iot/readings', { params: { deviceId: 'esp32-01' } });
       setSensorReadings(response.data.readings || []);
-      setSensorMessage(response.data.latest
-        ? `Última lectura recibida ${new Intl.DateTimeFormat('es-GT', {
-          dateStyle: 'short',
-          timeStyle: 'medium',
-        }).format(new Date(response.data.latest.recordedAt))}.`
-        : 'Dispositivo vinculado; esperando la primera lectura.');
     } catch (error) {
-      setSensorMessage(error.response?.data?.message || 'No se pudo consultar la telemetría.');
+      console.error('Error al obtener lecturas Node-RED:', error);
     } finally {
       setSensorLoading(false);
     }
-  }, [deviceId]);
+  }, []);
 
+  // --- Node Clima: verificar estado de conexión con el flujo Node-RED ---
+  const checkNodeRedStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/esp32/telemetry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ping: true }),
+      });
+      // Si Node-RED responde (400, 401 o 200), el flujo de telemetría está activo
+      if (res.status === 400 || res.status === 401 || res.status === 200 || res.status === 201) {
+        setNodeRedConnected(true);
+      } else {
+        setNodeRedConnected(false);
+      }
+    } catch {
+      try {
+        await api.get('/iot/readings', { params: { deviceId: 'esp32-01' } });
+        setNodeRedConnected(true);
+      } catch {
+        setNodeRedConnected(false);
+      }
+    }
+  }, []);
+
+  // Refrescar lecturas automáticamente mientras el panel Node Clima esté abierto
   useEffect(() => {
-    if (activeSection !== 'iot' || !preferences.autoRefreshSensors) return undefined;
+    if (activeSection !== 'iot' && activeSection !== 'comparison') return undefined;
+
+    checkNodeRedStatus();
+    refreshSensorReadings();
+
+    if (!preferences.autoRefreshSensors) return undefined;
 
     const timer = window.setInterval(
-      refreshSensorReadings,
+      () => {
+        checkNodeRedStatus();
+        refreshSensorReadings();
+      },
       preferences.sensorRefreshSeconds * 1000,
     );
     return () => window.clearInterval(timer);
@@ -804,23 +814,8 @@ function App() {
     preferences.autoRefreshSensors,
     preferences.sensorRefreshSeconds,
     refreshSensorReadings,
+    checkNodeRedStatus,
   ]);
-
-  const handleClaimDevice = async (event) => {
-    event.preventDefault();
-    setSensorLoading(true);
-    setSensorMessage('');
-    try {
-      await api.post('/iot/devices', { deviceId, claimCode: deviceClaimCode });
-      setDeviceClaimCode('');
-      setSensorMessage('Dispositivo vinculado a tu cuenta.');
-      await refreshSensorReadings();
-    } catch (error) {
-      setSensorMessage(error.response?.data?.message || 'No se pudo vincular el dispositivo.');
-    } finally {
-      setSensorLoading(false);
-    }
-  };
 
   const handleSaveProfile = async (event) => {
     event.preventDefault();
@@ -875,65 +870,6 @@ function App() {
     }
   };
 
-  const handleAuthChange = (field, value) => {
-    setAuthData((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleAuthSubmit = async (event) => {
-    event.preventDefault();
-    setLoading(true);
-
-    try {
-      const endpoint = authMode === 'login' ? '/auth/login' : '/auth/register';
-      const response = await api.post(endpoint, authData);
-
-      setToken(response.data.token);
-      setMessage({ type: 'success', text: response.data.message });
-      setAuthData(initialAuth);
-    } catch (error) {
-      const errorMessage = error.response?.data?.message || 'No se pudo completar la operación.';
-      setMessage({ type: 'error', text: errorMessage });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSocialSignIn = async (providerName) => {
-    if (!firebaseAuth) {
-      setMessage({ type: 'error', text: 'Configura Firebase para habilitar el inicio social.' });
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      let provider;
-
-      if (providerName === 'google') {
-        provider = new GoogleAuthProvider();
-      } else if (providerName === 'facebook') {
-        provider = new FacebookAuthProvider();
-      } else {
-        provider = new OAuthProvider('apple.com');
-        provider.addScope('email');
-        provider.addScope('name');
-      }
-
-      const result = await signInWithPopup(firebaseAuth, provider);
-      const idToken = await result.user.getIdToken();
-      const response = await api.post('/auth/firebase', { idToken });
-
-      setToken(response.data.token);
-      setMessage({ type: 'success', text: response.data.message });
-    } catch (error) {
-      const errorMessage = error.response?.data?.message
-        || error.message
-        || 'No se pudo iniciar sesión con este proveedor.';
-      setMessage({ type: 'error', text: errorMessage });
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const executeWeatherSearch = async (params) => {
     setLoading(true);
@@ -1063,27 +999,8 @@ function App() {
   };
 
   const handleLogout = () => {
-    setToken('');
-    setWeather({
-      location: { name: 'Guatemala', country: 'Guatemala', latitude: 14.6349, longitude: -90.5069 },
-      current: {
-        temperature: 28,
-        humidity: 61,
-        precipitation: 12,
-        windSpeed: 16,
-        windDirection: 135,
-        feelsLike: 27,
-        pressure: 1013,
-        visibility: 10,
-        uvIndex: 5,
-        weatherLabel: 'Parcialmente nublado',
-        isDay: true,
-      },
-      mapUrl: 'https://www.openstreetmap.org/?mlat=14.6349&mlon=-90.5069#map=10/14.6349/-90.5069',
-      daily: [],
-      alertType: 'Sin datos recientes',
-    });
-    setMessage({ type: 'info', text: 'Sesión cerrada.' });
+    setMessage({ type: 'info', text: 'Cerrando sesión en Keycloak...' });
+    logout();
   };
 
   const weatherIcon = getWeatherIcon(weather.current?.weatherLabel || '');
@@ -1096,7 +1013,15 @@ function App() {
   const stormHours = (weather.hourly || []).filter((hour) => [95, 96, 99].includes(Number(hour.weatherCode)));
   const stormDays = (weather.daily || []).filter((day) => [95, 96, 99].includes(Number(day.weatherCode)));
 
-  if (!token) {
+  if (authLoading) {
+    return (
+      <div className="auth-page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: '#94a3b8', fontSize: '1.1rem' }}>Cargando sesión con Keycloak...</div>
+      </div>
+    );
+  }
+
+  if (!authenticated) {
     return (
       <div className="auth-page">
         <div className="auth-visual">
@@ -1148,92 +1073,41 @@ function App() {
             <button
               type="button"
               className={authMode === 'login' ? 'chip active' : 'chip'}
-              onClick={() => setAuthMode('login')}
+              onClick={() => {
+                setAuthMode('login');
+                login();
+              }}
             >
               Iniciar sesión
             </button>
             <button
               type="button"
               className={authMode === 'register' ? 'chip active' : 'chip'}
-              onClick={() => setAuthMode('register')}
+              onClick={() => {
+                setAuthMode('register');
+                register();
+              }}
             >
               Registrarme
             </button>
           </div>
 
-          <form onSubmit={handleAuthSubmit} className="card-form">
-            {authMode === 'register' && (
-              <label>
-                <span>Nombre completo</span>
-                <input
-                  type="text"
-                  value={authData.name}
-                  onChange={(e) => handleAuthChange('name', e.target.value)}
-                  placeholder="Ej. Ana García"
-                />
-              </label>
-            )}
+          <div className="card-form" style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <p style={{ color: '#94a3b8', fontSize: '0.95rem', lineHeight: '1.5', margin: 0 }}>
+              {authMode === 'login'
+                ? 'Accede al sistema de forma rápida y centralizada con tu cuenta en Keycloak.'
+                : 'Crea tu nueva cuenta protegida en Keycloak para acceder a las alertas y métricas meteorológicas.'}
+            </p>
 
-            <label>
-              <span>Correo electrónico</span>
-              <input
-                type="email"
-                value={authData.email}
-                onChange={(e) => handleAuthChange('email', e.target.value)}
-                placeholder="usuario@correo.com"
-              />
-            </label>
-
-            <label>
-              <span>Contraseña</span>
-              <input
-                type="password"
-                value={authData.password}
-                onChange={(e) => handleAuthChange('password', e.target.value)}
-                placeholder="••••••••"
-              />
-            </label>
-
-            <button type="submit" className="primary-btn" disabled={loading}>
-              {loading ? 'Procesando...' : authMode === 'login' ? 'Entrar al panel' : 'Crear cuenta'}
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={() => (authMode === 'login' ? login() : register())}
+              disabled={loading}
+            >
+              {authMode === 'login' ? 'Iniciar sesión con Keycloak' : 'Crear cuenta con Keycloak'}
             </button>
-          </form>
-
-          {authMode === 'login' && (
-            <div className="social-auth">
-              <div className="social-divider"><span>o continúa con</span></div>
-              <button
-                type="button"
-                className="social-btn"
-                onClick={() => handleSocialSignIn('google')}
-                disabled={loading || !firebaseAuth}
-              >
-                <span className="provider-mark google-mark" aria-hidden="true">G</span>
-                Continuar con Google
-              </button>
-              <button
-                type="button"
-                className="social-btn"
-                onClick={() => handleSocialSignIn('facebook')}
-                disabled={loading || !firebaseAuth}
-              >
-                <span className="provider-mark facebook-mark" aria-hidden="true">f</span>
-                Continuar con Facebook
-              </button>
-              <button
-                type="button"
-                className="social-btn"
-                onClick={() => handleSocialSignIn('apple')}
-                disabled={loading || !firebaseAuth}
-              >
-                <span className="provider-mark apple-mark" aria-hidden="true">A</span>
-                Continuar con Apple
-              </button>
-              {!isFirebaseConfigured && (
-                <p className="social-config-note">Completa las variables Firebase del frontend y backend para habilitar estos accesos.</p>
-              )}
-            </div>
-          )}
+          </div>
 
           {message.text && <div className={`message ${message.type}`}>{message.text}</div>}
         </div>
@@ -1269,16 +1143,23 @@ function App() {
               className={activeSection === 'dashboard' ? 'active' : ''}
               aria-current={activeSection === 'dashboard' ? 'page' : undefined}
               onClick={() => setActiveSection('dashboard')}
-            ><span>⌂</span>Dashboard</button>
+            ><span>⌂</span>Api Clima</button>
             <button
               type="button"
               className={activeSection === 'iot' ? 'active' : ''}
               aria-current={activeSection === 'iot' ? 'page' : undefined}
+              onClick={() => setActiveSection('iot')}
+            ><span>◉</span>Node Clima</button>
+            <button
+              type="button"
+              className={activeSection === 'comparison' ? 'active' : ''}
+              aria-current={activeSection === 'comparison' ? 'page' : undefined}
               onClick={() => {
-                setActiveSection('iot');
+                setActiveSection('comparison');
                 refreshSensorReadings();
+                checkNodeRedStatus();
               }}
-            ><span>◉</span>ESP32 tiempo real</button>
+            ><span>⇄</span>Comparación Clima</button>
             <button
               type="button"
               className={activeSection === 'assistant' ? 'active' : ''}
@@ -1891,6 +1772,230 @@ function App() {
             </div>
           )}
 
+          {activeSection === 'comparison' && (() => {
+            const latestNode = sensorReadings.at(-1);
+            const apiTemp = Number(weather.current.temperature);
+            const apiHum = Number(weather.current.humidity);
+            const apiPres = Number(weather.current.pressure);
+            const apiRain = Number(weather.current.precipitation || 0);
+
+            const nodeTemp = latestNode?.temperature != null ? Number(latestNode.temperature) : null;
+            const nodeHum = latestNode?.humidity != null ? Number(latestNode.humidity) : null;
+            const nodePres = latestNode?.pressure != null ? Number(latestNode.pressure) : null;
+            const nodeRain = latestNode?.precipitation != null ? Number(latestNode.precipitation) : null;
+
+            const diffTemp = nodeTemp != null ? (nodeTemp - apiTemp).toFixed(1) : null;
+            const diffHum = nodeHum != null ? (nodeHum - apiHum).toFixed(1) : null;
+            const diffPres = nodePres != null ? (nodePres - apiPres).toFixed(1) : null;
+            const diffRain = nodeRain != null ? (nodeRain - apiRain).toFixed(1) : null;
+
+            return (
+              <div className="settings-card comparison-card">
+                <div className="iot-heading">
+                  <div>
+                    <span className="badge">Análisis Comparativo</span>
+                    <h2>Comparación: Api Clima vs Node Clima</h2>
+                    <p className="settings-intro">
+                      Contraste en tiempo real entre los datos meteorológicos satelitales (Api Clima - {weather.location.name}) y las mediciones locales del sensor ESP32 recibidas mediante Node-RED (Node Clima).
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span className="status-chip" style={{ background: 'rgba(94, 234, 212, 0.15)', borderColor: 'rgba(94, 234, 212, 0.35)', color: '#5eead4' }}>
+                      ● Api Clima (En línea)
+                    </span>
+                    <span
+                      className="status-chip"
+                      style={
+                        nodeRedConnected === true
+                          ? { background: 'rgba(140,231,182,0.15)', borderColor: 'rgba(140,231,182,0.35)', color: '#8ce7b6' }
+                          : nodeRedConnected === false
+                          ? { background: 'rgba(255,138,138,0.12)', borderColor: 'rgba(255,138,138,0.3)', color: '#ff8a8a' }
+                          : { background: 'rgba(251,191,36,0.12)', borderColor: 'rgba(251,191,36,0.3)', color: '#fbbf24' }
+                      }
+                    >
+                      {nodeRedConnected === true ? '● Node-RED' : nodeRedConnected === false ? '○ Node-RED' : '◌ Node-RED'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Resumen de Fuentes Lado a Lado */}
+                <div className="comparison-sources-grid">
+                  <article className="mini-metric-card comparison-source-card">
+                    <div className="comparison-source-header">
+                      <span className="metric-icon">🌐</span>
+                      <div>
+                        <h3>Api Clima</h3>
+                        <p className="source-subtitle">Open-Meteo · Satelital / Modelo Global</p>
+                      </div>
+                    </div>
+                    <div className="comparison-source-body">
+                      <p><strong>Ubicación:</strong> {weather.location.name}, {weather.location.country}</p>
+                      <p><strong>Condición:</strong> {weather.current.weatherLabel}</p>
+                      <p><strong>Sensación:</strong> {weather.current.feelsLike}°C · <strong>Viento:</strong> {weather.current.windSpeed} km/h</p>
+                    </div>
+                  </article>
+
+                  <article className="mini-metric-card comparison-source-card primary">
+                    <div className="comparison-source-header">
+                      <span className="metric-icon">📡</span>
+                      <div>
+                        <h3>Node Clima</h3>
+                        <p className="source-subtitle">ESP32 · Sensor Físico / Simulado</p>
+                      </div>
+                    </div>
+                    <div className="comparison-source-body">
+                      <p><strong>Dispositivo:</strong> {latestNode?.deviceId || 'esp32-01'}</p>
+                      <p><strong>Canal:</strong> ESP32 → Node-RED → PostgreSQL</p>
+                      <p>
+                        <strong>Última lectura:</strong>{' '}
+                        {latestNode?.recordedAt
+                          ? new Intl.DateTimeFormat('es-GT', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(latestNode.recordedAt))
+                          : 'Esperando datos'}
+                      </p>
+                    </div>
+                  </article>
+                </div>
+
+                {/* Tarjetas de Diferencia Métrica */}
+                <div className="sensor-metrics comparison-metrics-grid">
+                  <article className="mini-metric-card">
+                    <span className="metric-icon">🌡️</span>
+                    <div>
+                      <p>Temperatura</p>
+                      <div className="comparison-metric-values">
+                        <span>Api: <strong>{apiTemp.toFixed(1)}°C</strong></span>
+                        <span>Node: <strong>{nodeTemp != null ? `${nodeTemp.toFixed(1)}°C` : 'N/D'}</strong></span>
+                      </div>
+                      {diffTemp != null && (
+                        <div className={`metric-delta ${Number(diffTemp) > 0 ? 'higher' : Number(diffTemp) < 0 ? 'lower' : 'equal'}`}>
+                          Δ {Number(diffTemp) > 0 ? `+${diffTemp}` : diffTemp} °C {Number(diffTemp) > 0 ? '(Sensor +)' : Number(diffTemp) < 0 ? '(Sensor -)' : '(=)'}
+                        </div>
+                      )}
+                    </div>
+                  </article>
+
+                  <article className="mini-metric-card">
+                    <span className="metric-icon">💧</span>
+                    <div>
+                      <p>Humedad</p>
+                      <div className="comparison-metric-values">
+                        <span>Api: <strong>{apiHum.toFixed(1)}%</strong></span>
+                        <span>Node: <strong>{nodeHum != null ? `${nodeHum.toFixed(1)}%` : 'N/D'}</strong></span>
+                      </div>
+                      {diffHum != null && (
+                        <div className={`metric-delta ${Number(diffHum) > 0 ? 'higher' : Number(diffHum) < 0 ? 'lower' : 'equal'}`}>
+                          Δ {Number(diffHum) > 0 ? `+${diffHum}` : diffHum} %
+                        </div>
+                      )}
+                    </div>
+                  </article>
+
+                  <article className="mini-metric-card">
+                    <span className="metric-icon">🌬️</span>
+                    <div>
+                      <p>Presión Atmosférica</p>
+                      <div className="comparison-metric-values">
+                        <span>Api: <strong>{apiPres.toFixed(1)} hPa</strong></span>
+                        <span>Node: <strong>{nodePres != null ? `${nodePres.toFixed(1)} hPa` : 'N/D'}</strong></span>
+                      </div>
+                      {diffPres != null && (
+                        <div className={`metric-delta ${Number(diffPres) > 0 ? 'higher' : Number(diffPres) < 0 ? 'lower' : 'equal'}`}>
+                          Δ {Number(diffPres) > 0 ? `+${diffPres}` : diffPres} hPa
+                        </div>
+                      )}
+                    </div>
+                  </article>
+
+                  <article className="mini-metric-card">
+                    <span className="metric-icon">🌧️</span>
+                    <div>
+                      <p>Precipitación</p>
+                      <div className="comparison-metric-values">
+                        <span>Api: <strong>{apiRain.toFixed(1)} mm</strong></span>
+                        <span>Node: <strong>{nodeRain != null ? `${nodeRain.toFixed(1)} mm` : 'N/D'}</strong></span>
+                      </div>
+                      {diffRain != null && (
+                        <div className={`metric-delta ${Number(diffRain) > 0 ? 'higher' : Number(diffRain) < 0 ? 'lower' : 'equal'}`}>
+                          Δ {Number(diffRain) > 0 ? `+${diffRain}` : diffRain} mm
+                        </div>
+                      )}
+                    </div>
+                  </article>
+                </div>
+
+                {/* Tabla Comparativa Detallada */}
+                <div className="sensor-chart comparison-table-wrap">
+                  <div className="section-heading">
+                    <div>
+                      <span className="section-kicker">Tabla de Contraste</span>
+                      <h3>Métricas de Medición Detalladas</h3>
+                    </div>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      disabled={sensorLoading}
+                      onClick={() => { checkNodeRedStatus(); refreshSensorReadings(); }}
+                    >
+                      {sensorLoading ? 'Actualizando…' : '↻ Actualizar datos'}
+                    </button>
+                  </div>
+
+                  <div className="comparison-table">
+                    <div className="comparison-row header">
+                      <span>Variable Meteorológica</span>
+                      <span>Api Clima (Global)</span>
+                      <span>Node Clima (Local)</span>
+                      <span>Diferencia Relativa</span>
+                    </div>
+
+                    <div className="comparison-row">
+                      <span>🌡️ Temperatura Ambiental</span>
+                      <strong>{apiTemp.toFixed(1)} °C</strong>
+                      <strong style={{ color: '#ffd49b' }}>{nodeTemp != null ? `${nodeTemp.toFixed(1)} °C` : 'N/D'}</strong>
+                      <span className={`delta-badge ${Number(diffTemp) > 0 ? 'pos' : Number(diffTemp) < 0 ? 'neg' : ''}`}>
+                        {diffTemp != null ? `${Number(diffTemp) > 0 ? '+' : ''}${diffTemp} °C` : 'N/D'}
+                      </span>
+                    </div>
+
+                    <div className="comparison-row">
+                      <span>💧 Humedad Relativa</span>
+                      <strong>{apiHum.toFixed(1)} %</strong>
+                      <strong style={{ color: 'var(--accent)' }}>{nodeHum != null ? `${nodeHum.toFixed(1)} %` : 'N/D'}</strong>
+                      <span className={`delta-badge ${Number(diffHum) > 0 ? 'pos' : Number(diffHum) < 0 ? 'neg' : ''}`}>
+                        {diffHum != null ? `${Number(diffHum) > 0 ? '+' : ''}${diffHum} %` : 'N/D'}
+                      </span>
+                    </div>
+
+                    <div className="comparison-row">
+                      <span>🌬️ Presión Barométrica</span>
+                      <strong>{apiPres.toFixed(1)} hPa</strong>
+                      <strong>{nodePres != null ? `${nodePres.toFixed(1)} hPa` : 'N/D'}</strong>
+                      <span className={`delta-badge ${Number(diffPres) > 0 ? 'pos' : Number(diffPres) < 0 ? 'neg' : ''}`}>
+                        {diffPres != null ? `${Number(diffPres) > 0 ? '+' : ''}${diffPres} hPa` : 'N/D'}
+                      </span>
+                    </div>
+
+                    <div className="comparison-row">
+                      <span>🌧️ Precipitación / Lluvia</span>
+                      <strong>{apiRain.toFixed(1)} mm</strong>
+                      <strong>{nodeRain != null ? `${nodeRain.toFixed(1)} mm` : 'N/D'}</strong>
+                      <span className={`delta-badge ${Number(diffRain) > 0 ? 'pos' : Number(diffRain) < 0 ? 'neg' : ''}`}>
+                        {diffRain != null ? `${Number(diffRain) > 0 ? '+' : ''}${diffRain} mm` : 'N/D'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="sensor-weather-context">
+                  <span className="section-kicker">Interpretación Meteorológica</span>
+                  <p>
+                    Las lecturas de <strong>Node Clima</strong> capturan el microclima inmediato y específico de la habitación o estación del sensor, mientras que <strong>Api Clima</strong> refleja estimaciones del modelo de predicción global para toda la zona de {weather.location.name}. Las diferencias son normales debido a factores de calibración, micro-ambientes cerrados y retrasos de actualización satelital.
+                  </p>
+                </div>
+              </div>
+            );
+          })()}
+
           {activeSection === 'assistant' && (
             <div className="settings-card assistant-card">
               <span className="badge badge-soft">Gemini</span>
@@ -1927,98 +2032,387 @@ function App() {
               <div className="iot-heading">
                 <div>
                   <span className="badge">Telemetría IoT</span>
-                  <h2>ESP32 en tiempo real</h2>
-                  <p className="settings-intro">Las lecturas del ESP32 llegan por Node-RED y se guardan en PostgreSQL. Vincula el dispositivo para asociarlo a tu cuenta.</p>
+                  <h2>Node Clima</h2>
+                  <p className="settings-intro">
+                    Clima en Tiempo Real — datos recibidos desde Node-RED (Flujo: Telemetría ESP32
+                    → Validar y preparar lectura → Guardar en API y PostgreSQL).
+                  </p>
                 </div>
-                <span className="status-chip">● Node-RED</span>
+                <span
+                  className="status-chip"
+                  style={
+                    nodeRedConnected === true
+                      ? { background: 'rgba(140,231,182,0.15)', borderColor: 'rgba(140,231,182,0.35)', color: '#8ce7b6' }
+                      : nodeRedConnected === false
+                      ? { background: 'rgba(255,138,138,0.12)', borderColor: 'rgba(255,138,138,0.3)', color: '#ff8a8a' }
+                      : { background: 'rgba(251,191,36,0.12)', borderColor: 'rgba(251,191,36,0.3)', color: '#fbbf24' }
+                  }
+                >
+                  {nodeRedConnected === true ? '● Node-RED' : nodeRedConnected === false ? '○ Node-RED' : '◌ Node-RED'}
+                </span>
               </div>
-              <form className="device-form" onSubmit={handleClaimDevice}>
-                <label>
-                  ID del dispositivo
-                  <input
-                    value={deviceId}
-                    onChange={(event) => setDeviceId(event.target.value)}
-                    minLength="2"
-                    maxLength="100"
-                    required
-                  />
-                </label>
-                <label>
-                  Código de vinculación
-                  <input
-                    type="password"
-                    value={deviceClaimCode}
-                    onChange={(event) => setDeviceClaimCode(event.target.value)}
-                    placeholder="Código configurado en el servidor"
-                    required
-                  />
-                </label>
-                <button type="submit" className="secondary-btn" disabled={sensorLoading}>
-                  Vincular dispositivo
-                </button>
+
+              {sensorLoading && sensorReadings.length === 0 && (
+                <div className="billing-placeholder sensor-empty">
+                  <span aria-hidden="true">◉</span>
+                  <strong>Consultando Node-RED…</strong>
+                  <p>Conectando con el flujo de telemetría del ESP32.</p>
+                </div>
+              )}
+
+              {!sensorLoading && nodeRedConnected === false && sensorReadings.length === 0 && (
+                <div className="billing-placeholder sensor-empty">
+                  <span aria-hidden="true" style={{ color: '#ff8a8a' }}>○</span>
+                  <strong>Sin conexión con Node-RED</strong>
+                  <p>El endpoint de telemetría no respondió. Verifica que Node-RED esté activo y el flujo <em>Telemetría ESP32</em> esté desplegado.</p>
+                </div>
+              )}
+
+              {sensorReadings.length > 0 && (() => {
+                const latest = sensorReadings.at(-1);
+                return (
+                  <>
+                    <div className="sensor-metrics">
+                      <article className="mini-metric-card primary">
+                        <span className="metric-icon">🌡️</span>
+                        <div>
+                          <p>Temperatura</p>
+                          <strong>{latest.temperature != null ? latest.temperature.toFixed(1) + ' °C' : 'N/D'}</strong>
+                        </div>
+                      </article>
+                      <article className="mini-metric-card">
+                        <span className="metric-icon">💧</span>
+                        <div>
+                          <p>Humedad</p>
+                          <strong>{latest.humidity != null ? latest.humidity.toFixed(1) + ' %' : 'N/D'}</strong>
+                        </div>
+                      </article>
+                      <article className="mini-metric-card">
+                        <span className="metric-icon">🌬️</span>
+                        <div>
+                          <p>Presión Atmosférica</p>
+                          <strong>{latest.pressure != null ? latest.pressure.toFixed(1) + ' hPa' : 'N/D'}</strong>
+                        </div>
+                      </article>
+                      <article className="mini-metric-card">
+                        <span className="metric-icon">🌧️</span>
+                        <div>
+                          <p>Precipitación</p>
+                          <strong>{latest.precipitation != null ? latest.precipitation.toFixed(1) + ' mm' : 'N/D'}</strong>
+                        </div>
+                      </article>
+                    </div>
+
+                    <div className="sensor-chart">
+                      <div className="section-heading">
+                        <div>
+                          <span className="section-kicker">Historial reciente · Node-RED</span>
+                          <h3>Temperatura y humedad</h3>
+                        </div>
+                        <span className="section-note">Últimas {sensorReadings.length} lecturas</span>
+                      </div>
+                      <div className="sensor-reading-list">
+                        {sensorReadings.slice(-12).reverse().map((reading) => (
+                          <div className="sensor-reading-row" key={reading.id}>
+                            <time>{new Intl.DateTimeFormat('es-GT', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              second: '2-digit',
+                            }).format(new Date(reading.recordedAt))}</time>
+                            <span className="sensor-reading-temperature">🌡 {reading.temperature != null ? reading.temperature.toFixed(1) + '°C' : 'N/D'}</span>
+                            <span className="sensor-reading-humidity">💧 {reading.humidity != null ? reading.humidity.toFixed(1) + '%' : 'N/D'}</span>
+                            <div className="sensor-bar" aria-hidden="true">
+                              <i style={{ width: `${Math.max(4, Math.min(100, reading.humidity ?? 0))}%` }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+
+              {!sensorLoading && nodeRedConnected !== false && sensorReadings.length === 0 && (
+                <div className="billing-placeholder sensor-empty">
+                  <span aria-hidden="true">◉</span>
+                  <strong>Esperando datos del ESP32</strong>
+                  <p>Node-RED está conectado. Esperando que el ESP32 publique su primera lectura en el flujo de telemetría.</p>
+                </div>
+              )}
+
+              <div style={{ marginTop: 16, display: 'flex', gap: 12, alignItems: 'center' }}>
                 <button
                   type="button"
                   className="primary-btn"
                   disabled={sensorLoading}
-                  onClick={refreshSensorReadings}
+                  onClick={() => { checkNodeRedStatus(); refreshSensorReadings(); }}
                 >
-                  {sensorLoading ? 'Consultando…' : 'Actualizar lecturas'}
+                  {sensorLoading ? 'Actualizando…' : '↻ Actualizar lecturas'}
+                </button>
+                {sensorReadings.length > 0 && (
+                  <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
+                    Última lectura:{' '}
+                    {new Intl.DateTimeFormat('es-GT', {
+                      dateStyle: 'short',
+                      timeStyle: 'medium',
+                    }).format(new Date(sensorReadings.at(-1).recordedAt))}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+                    {activeSection === 'comparison' && (() => {
+            const latestNode = sensorReadings.at(-1);
+            const apiTemp = Number(weather.current.temperature);
+            const apiHum = Number(weather.current.humidity);
+            const apiPres = Number(weather.current.pressure);
+            const apiRain = Number(weather.current.precipitation || 0);
+
+            const nodeTemp = latestNode?.temperature != null ? Number(latestNode.temperature) : null;
+            const nodeHum = latestNode?.humidity != null ? Number(latestNode.humidity) : null;
+            const nodePres = latestNode?.pressure != null ? Number(latestNode.pressure) : null;
+            const nodeRain = latestNode?.precipitation != null ? Number(latestNode.precipitation) : null;
+
+            const diffTemp = nodeTemp != null ? (nodeTemp - apiTemp).toFixed(1) : null;
+            const diffHum = nodeHum != null ? (nodeHum - apiHum).toFixed(1) : null;
+            const diffPres = nodePres != null ? (nodePres - apiPres).toFixed(1) : null;
+            const diffRain = nodeRain != null ? (nodeRain - apiRain).toFixed(1) : null;
+
+            return (
+              <div className="settings-card comparison-card">
+                <div className="iot-heading">
+                  <div>
+                    <span className="badge">Análisis Comparativo</span>
+                    <h2>Comparación: Api Clima vs Node Clima</h2>
+                    <p className="settings-intro">
+                      Contraste en tiempo real entre los datos meteorológicos satelitales (Api Clima - {weather.location.name}) y las mediciones locales del sensor ESP32 recibidas mediante Node-RED (Node Clima).
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span className="status-chip" style={{ background: 'rgba(94, 234, 212, 0.15)', borderColor: 'rgba(94, 234, 212, 0.35)', color: '#5eead4' }}>
+                      ● Api Clima (En línea)
+                    </span>
+                    <span
+                      className="status-chip"
+                      style={
+                        nodeRedConnected === true
+                          ? { background: 'rgba(140,231,182,0.15)', borderColor: 'rgba(140,231,182,0.35)', color: '#8ce7b6' }
+                          : nodeRedConnected === false
+                          ? { background: 'rgba(255,138,138,0.12)', borderColor: 'rgba(255,138,138,0.3)', color: '#ff8a8a' }
+                          : { background: 'rgba(251,191,36,0.12)', borderColor: 'rgba(251,191,36,0.3)', color: '#fbbf24' }
+                      }
+                    >
+                      {nodeRedConnected === true ? '● Node-RED' : nodeRedConnected === false ? '○ Node-RED' : '◌ Node-RED'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Resumen de Fuentes Lado a Lado */}
+                <div className="comparison-sources-grid">
+                  <article className="mini-metric-card comparison-source-card">
+                    <div className="comparison-source-header">
+                      <span className="metric-icon">🌐</span>
+                      <div>
+                        <h3>Api Clima</h3>
+                        <p className="source-subtitle">Open-Meteo · Satelital / Modelo Global</p>
+                      </div>
+                    </div>
+                    <div className="comparison-source-body">
+                      <p><strong>Ubicación:</strong> {weather.location.name}, {weather.location.country}</p>
+                      <p><strong>Condición:</strong> {weather.current.weatherLabel}</p>
+                      <p><strong>Sensación:</strong> {weather.current.feelsLike}°C · <strong>Viento:</strong> {weather.current.windSpeed} km/h</p>
+                    </div>
+                  </article>
+
+                  <article className="mini-metric-card comparison-source-card primary">
+                    <div className="comparison-source-header">
+                      <span className="metric-icon">📡</span>
+                      <div>
+                        <h3>Node Clima</h3>
+                        <p className="source-subtitle">ESP32 · Sensor Físico / Simulado</p>
+                      </div>
+                    </div>
+                    <div className="comparison-source-body">
+                      <p><strong>Dispositivo:</strong> {latestNode?.deviceId || 'esp32-01'}</p>
+                      <p><strong>Canal:</strong> ESP32 → Node-RED → PostgreSQL</p>
+                      <p>
+                        <strong>Última lectura:</strong>{' '}
+                        {latestNode?.recordedAt
+                          ? new Intl.DateTimeFormat('es-GT', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(latestNode.recordedAt))
+                          : 'Esperando datos'}
+                      </p>
+                    </div>
+                  </article>
+                </div>
+
+                {/* Tarjetas de Diferencia Métrica */}
+                <div className="sensor-metrics comparison-metrics-grid">
+                  <article className="mini-metric-card">
+                    <span className="metric-icon">🌡️</span>
+                    <div>
+                      <p>Temperatura</p>
+                      <div className="comparison-metric-values">
+                        <span>Api: <strong>{apiTemp.toFixed(1)}°C</strong></span>
+                        <span>Node: <strong>{nodeTemp != null ? `${nodeTemp.toFixed(1)}°C` : 'N/D'}</strong></span>
+                      </div>
+                      {diffTemp != null && (
+                        <div className={`metric-delta ${Number(diffTemp) > 0 ? 'higher' : Number(diffTemp) < 0 ? 'lower' : 'equal'}`}>
+                          Δ {Number(diffTemp) > 0 ? `+${diffTemp}` : diffTemp} °C {Number(diffTemp) > 0 ? '(Sensor +)' : Number(diffTemp) < 0 ? '(Sensor -)' : '(=)'}
+                        </div>
+                      )}
+                    </div>
+                  </article>
+
+                  <article className="mini-metric-card">
+                    <span className="metric-icon">💧</span>
+                    <div>
+                      <p>Humedad</p>
+                      <div className="comparison-metric-values">
+                        <span>Api: <strong>{apiHum.toFixed(1)}%</strong></span>
+                        <span>Node: <strong>{nodeHum != null ? `${nodeHum.toFixed(1)}%` : 'N/D'}</strong></span>
+                      </div>
+                      {diffHum != null && (
+                        <div className={`metric-delta ${Number(diffHum) > 0 ? 'higher' : Number(diffHum) < 0 ? 'lower' : 'equal'}`}>
+                          Δ {Number(diffHum) > 0 ? `+${diffHum}` : diffHum} %
+                        </div>
+                      )}
+                    </div>
+                  </article>
+
+                  <article className="mini-metric-card">
+                    <span className="metric-icon">🌬️</span>
+                    <div>
+                      <p>Presión Atmosférica</p>
+                      <div className="comparison-metric-values">
+                        <span>Api: <strong>{apiPres.toFixed(1)} hPa</strong></span>
+                        <span>Node: <strong>{nodePres != null ? `${nodePres.toFixed(1)} hPa` : 'N/D'}</strong></span>
+                      </div>
+                      {diffPres != null && (
+                        <div className={`metric-delta ${Number(diffPres) > 0 ? 'higher' : Number(diffPres) < 0 ? 'lower' : 'equal'}`}>
+                          Δ {Number(diffPres) > 0 ? `+${diffPres}` : diffPres} hPa
+                        </div>
+                      )}
+                    </div>
+                  </article>
+
+                  <article className="mini-metric-card">
+                    <span className="metric-icon">🌧️</span>
+                    <div>
+                      <p>Precipitación</p>
+                      <div className="comparison-metric-values">
+                        <span>Api: <strong>{apiRain.toFixed(1)} mm</strong></span>
+                        <span>Node: <strong>{nodeRain != null ? `${nodeRain.toFixed(1)} mm` : 'N/D'}</strong></span>
+                      </div>
+                      {diffRain != null && (
+                        <div className={`metric-delta ${Number(diffRain) > 0 ? 'higher' : Number(diffRain) < 0 ? 'lower' : 'equal'}`}>
+                          Δ {Number(diffRain) > 0 ? `+${diffRain}` : diffRain} mm
+                        </div>
+                      )}
+                    </div>
+                  </article>
+                </div>
+
+                {/* Tabla Comparativa Detallada */}
+                <div className="sensor-chart comparison-table-wrap">
+                  <div className="section-heading">
+                    <div>
+                      <span className="section-kicker">Tabla de Contraste</span>
+                      <h3>Métricas de Medición Detalladas</h3>
+                    </div>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      disabled={sensorLoading}
+                      onClick={() => { checkNodeRedStatus(); refreshSensorReadings(); }}
+                    >
+                      {sensorLoading ? 'Actualizando…' : '↻ Actualizar datos'}
+                    </button>
+                  </div>
+
+                  <div className="comparison-table">
+                    <div className="comparison-row header">
+                      <span>Variable Meteorológica</span>
+                      <span>Api Clima (Global)</span>
+                      <span>Node Clima (Local)</span>
+                      <span>Diferencia Relativa</span>
+                    </div>
+
+                    <div className="comparison-row">
+                      <span>🌡️ Temperatura Ambiental</span>
+                      <strong>{apiTemp.toFixed(1)} °C</strong>
+                      <strong style={{ color: '#ffd49b' }}>{nodeTemp != null ? `${nodeTemp.toFixed(1)} °C` : 'N/D'}</strong>
+                      <span className={`delta-badge ${Number(diffTemp) > 0 ? 'pos' : Number(diffTemp) < 0 ? 'neg' : ''}`}>
+                        {diffTemp != null ? `${Number(diffTemp) > 0 ? '+' : ''}${diffTemp} °C` : 'N/D'}
+                      </span>
+                    </div>
+
+                    <div className="comparison-row">
+                      <span>💧 Humedad Relativa</span>
+                      <strong>{apiHum.toFixed(1)} %</strong>
+                      <strong style={{ color: 'var(--accent)' }}>{nodeHum != null ? `${nodeHum.toFixed(1)} %` : 'N/D'}</strong>
+                      <span className={`delta-badge ${Number(diffHum) > 0 ? 'pos' : Number(diffHum) < 0 ? 'neg' : ''}`}>
+                        {diffHum != null ? `${Number(diffHum) > 0 ? '+' : ''}${diffHum} %` : 'N/D'}
+                      </span>
+                    </div>
+
+                    <div className="comparison-row">
+                      <span>🌬️ Presión Barométrica</span>
+                      <strong>{apiPres.toFixed(1)} hPa</strong>
+                      <strong>{nodePres != null ? `${nodePres.toFixed(1)} hPa` : 'N/D'}</strong>
+                      <span className={`delta-badge ${Number(diffPres) > 0 ? 'pos' : Number(diffPres) < 0 ? 'neg' : ''}`}>
+                        {diffPres != null ? `${Number(diffPres) > 0 ? '+' : ''}${diffPres} hPa` : 'N/D'}
+                      </span>
+                    </div>
+
+                    <div className="comparison-row">
+                      <span>🌧️ Precipitación / Lluvia</span>
+                      <strong>{apiRain.toFixed(1)} mm</strong>
+                      <strong>{nodeRain != null ? `${nodeRain.toFixed(1)} mm` : 'N/D'}</strong>
+                      <span className={`delta-badge ${Number(diffRain) > 0 ? 'pos' : Number(diffRain) < 0 ? 'neg' : ''}`}>
+                        {diffRain != null ? `${Number(diffRain) > 0 ? '+' : ''}${diffRain} mm` : 'N/D'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="sensor-weather-context">
+                  <span className="section-kicker">Interpretación Meteorológica</span>
+                  <p>
+                    Las lecturas de <strong>Node Clima</strong> capturan el microclima inmediato y específico de la habitación o estación del sensor, mientras que <strong>Api Clima</strong> refleja estimaciones del modelo de predicción global para toda la zona de {weather.location.name}. Las diferencias son normales debido a factores de calibración, micro-ambientes cerrados y retrasos de actualización satelital.
+                  </p>
+                </div>
+              </div>
+            );
+          })()}
+
+          {activeSection === 'assistant' && (
+            <div className="settings-card assistant-card">
+              <span className="badge badge-soft">Gemini</span>
+              <h2>Asistente de inteligencia artificial</h2>
+              <p className="settings-intro">Pregunta sobre el clima actual. Gemini recibirá los datos meteorológicos de {weather.location.name} para responder con contexto.</p>
+              <form className="assistant-form" onSubmit={handleAskAssistant}>
+                <label>
+                  ¿En qué te puedo ayudar?
+                  <textarea
+                    value={assistantQuestion}
+                    onChange={(event) => setAssistantQuestion(event.target.value)}
+                    placeholder="Ej.: ¿Qué precauciones debo tomar con la humedad y la lluvia actual?"
+                    minLength="2"
+                    maxLength="2000"
+                    required
+                    rows="4"
+                  />
+                </label>
+                <button type="submit" className="primary-btn" disabled={assistantLoading}>
+                  {assistantLoading ? 'Consultando Gemini…' : 'Preguntar a la IA'}
                 </button>
               </form>
-              {sensorMessage && <p className="sensor-status" aria-live="polite">{sensorMessage}</p>}
-              {sensorReadings.length > 0 ? (
-                <>
-                  <div className="sensor-metrics">
-                    <article className="mini-metric-card primary">
-                      <span className="metric-icon">🌡️</span>
-                      <div><p>Temperatura ESP32</p><strong>{sensorReadings.at(-1).temperature.toFixed(1)}°C</strong></div>
-                    </article>
-                    <article className="mini-metric-card">
-                      <span className="metric-icon">💧</span>
-                      <div><p>Humedad ESP32</p><strong>{sensorReadings.at(-1).humidity.toFixed(1)}%</strong></div>
-                    </article>
-                    <article className="mini-metric-card">
-                      <span className="metric-icon">🌡</span>
-                      <div><p>Presión atmosférica</p><strong>{sensorReadings.at(-1).pressure === null ? 'N/D' : `${sensorReadings.at(-1).pressure.toFixed(1)} hPa`}</strong></div>
-                    </article>
-                    <article className="mini-metric-card">
-                      <span className="metric-icon">🌧️</span>
-                      <div><p>Precipitación</p><strong>{sensorReadings.at(-1).precipitation === null ? `${weather.current.precipitation} mm · API` : `${sensorReadings.at(-1).precipitation.toFixed(1)} mm`}</strong></div>
-                    </article>
-                  </div>
-                  <div className="sensor-chart">
-                    <div className="section-heading">
-                      <div><span className="section-kicker">Historial reciente</span><h3>Temperatura y humedad</h3></div>
-                      <span className="section-note">Últimas {sensorReadings.length} lecturas</span>
-                    </div>
-                    <div className="sensor-reading-list">
-                      {sensorReadings.slice(-12).reverse().map((reading) => (
-                        <div className="sensor-reading-row" key={reading.id}>
-                          <time>{new Intl.DateTimeFormat('es-GT', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit',
-                          }).format(new Date(reading.recordedAt))}</time>
-                          <span className="sensor-reading-temperature">🌡 {reading.temperature.toFixed(1)}°C</span>
-                          <span className="sensor-reading-humidity">💧 {reading.humidity.toFixed(1)}%</span>
-                          <div className="sensor-bar" aria-hidden="true">
-                            <i style={{ width: `${Math.max(4, Math.min(100, reading.humidity))}%` }} />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="sensor-weather-context">
-                    <span className="section-kicker">Contexto meteorológico · {weather.location.name}</span>
-                    <p>Pronóstico actual: {weather.current.weatherLabel}, {Math.round(weather.current.temperature)}°C, humedad {weather.current.humidity}% y precipitación {weather.current.precipitation} mm. Las métricas del sensor y del servicio meteorológico se muestran por separado.</p>
-                  </div>
-                </>
-              ) : (
-                <div className="billing-placeholder sensor-empty">
-                  <span aria-hidden="true">◉</span>
-                  <strong>Aún no hay lecturas del dispositivo</strong>
-                  <p>Vincula el dispositivo y publica lecturas en <code>http://&lt;IP-DEL-SERVIDOR&gt;:5173/esp32/telemetry</code>. Se mostrarán aquí al consultar o actualizar el panel.</p>
-                </div>
+              {assistantAnswer && (
+                <article className="assistant-answer">
+                  <span className="section-kicker">Respuesta</span>
+                  <p>{assistantAnswer}</p>
+                </article>
               )}
             </div>
           )}

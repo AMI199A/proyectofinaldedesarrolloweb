@@ -6,6 +6,10 @@ export const migrateAuthSchema = async () => {
   await pool.query(
     'CREATE UNIQUE INDEX IF NOT EXISTS users_firebase_uid_unique ON users (firebase_uid)',
   );
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS keycloak_id TEXT');
+  await pool.query(
+    'CREATE UNIQUE INDEX IF NOT EXISTS users_keycloak_id_unique ON users (keycloak_id)',
+  );
   await pool.query("ALTER TABLE alerts ADD COLUMN IF NOT EXISTS severity VARCHAR(12) NOT NULL DEFAULT 'media'");
   await pool.query('ALTER TABLE alerts ADD COLUMN IF NOT EXISTS latitude DECIMAL(9,6)');
   await pool.query('ALTER TABLE alerts ADD COLUMN IF NOT EXISTS longitude DECIMAL(9,6)');

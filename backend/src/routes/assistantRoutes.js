@@ -25,7 +25,7 @@ router.post('/', authenticate, async (req, res, next) => {
     precipitation: Number.isFinite(Number(current.precipitation)) ? Number(current.precipitation) : null,
     condition: String(current.condition || '').slice(0, 100),
   };
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20000);
 

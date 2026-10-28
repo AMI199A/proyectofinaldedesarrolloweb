@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import jwt from 'jsonwebtoken';
 import pool from '../config/db.js';
 import weatherService from '../services/weatherService.js';
 import { getWeatherAlert } from '../services/weatherAlerts.js';
 import authenticate from '../middleware/auth.js';
+import { verifyKeycloakToken } from '../config/keycloak.js';
 
 const router = Router();
 const openWeatherLayers = new Set(['precipitation_new', 'temp_new', 'wind_new', 'clouds_new']);
@@ -107,31 +107,35 @@ router.get('/search', async (req, res, next) => {
     if (req.headers.authorization) {
       try {
         const token = req.headers.authorization.replace(/^Bearer\s+/i, '');
-        const payload = jwt.verify(token, process.env.JWT_SECRET || 'supersecretkey');
+        const decoded = await verifyKeycloakToken(token);
+        const userRes = await pool.query('SELECT id FROM users WHERE keycloak_id = $1 LIMIT 1', [decoded.sub]);
+        const userId = userRes.rows[0]?.id;
 
-        await pool.query(
-          `INSERT INTO weather_queries (user_id, city_name, country_name, temperature, alert_type)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [payload.id, weather.location.name, weather.location.country, weather.current.temperature, alertType],
-        );
-
-        if (alert) {
+        if (userId) {
           await pool.query(
-            `INSERT INTO alerts (user_id, city_name, alert_type, message, severity, latitude, longitude)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [
-              payload.id,
-              weather.location.name,
-              alert.type,
-              alert.message,
-              alert.severity,
-              weather.location.latitude,
-              weather.location.longitude,
-            ],
+            `INSERT INTO weather_queries (user_id, city_name, country_name, temperature, alert_type)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [userId, weather.location.name, weather.location.country, weather.current.temperature, alertType],
           );
+
+          if (alert) {
+            await pool.query(
+              `INSERT INTO alerts (user_id, city_name, alert_type, message, severity, latitude, longitude)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [
+                userId,
+                weather.location.name,
+                alert.type,
+                alert.message,
+                alert.severity,
+                weather.location.latitude,
+                weather.location.longitude,
+              ],
+            );
+          }
         }
       } catch (error) {
-        // se ignora si no se autentica correctamente
+        // Se ignora si no se autentica correctamente para consultas anónimas
       }
     }
 

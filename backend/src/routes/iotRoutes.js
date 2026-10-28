@@ -43,7 +43,21 @@ router.post('/devices', authenticate, async (req, res, next) => {
 
 router.get('/readings', authenticate, async (req, res, next) => {
   try {
-    const deviceId = typeof req.query.deviceId === 'string' ? req.query.deviceId.trim() : '';
+    let deviceId = typeof req.query.deviceId === 'string' ? req.query.deviceId.trim() : '';
+
+    // Si no se especifica deviceId, buscar el primer dispositivo del usuario o usar 'esp32-01' por defecto
+    if (!deviceId) {
+      const devRes = await pool.query(
+        'SELECT device_id FROM iot_devices WHERE user_id = $1 LIMIT 1',
+        [req.user.id],
+      );
+      if (devRes.rows.length > 0) {
+        deviceId = devRes.rows[0].device_id;
+      } else {
+        deviceId = 'esp32-01';
+      }
+    }
+
     if (!/^[a-zA-Z0-9_-]{2,100}$/.test(deviceId)) {
       return res.status(400).json({ message: 'Indica un identificador de dispositivo válido.' });
     }
@@ -52,8 +66,8 @@ router.get('/readings', authenticate, async (req, res, next) => {
       `SELECT r.id, r.device_id AS "deviceId", r.temperature, r.humidity,
               r.pressure, r.precipitation, r.recorded_at AS "recordedAt"
        FROM iot_readings r
-       JOIN iot_devices d ON d.device_id = r.device_id
-       WHERE r.device_id = $1 AND d.user_id = $2
+       LEFT JOIN iot_devices d ON d.device_id = r.device_id
+       WHERE r.device_id = $1 AND (d.user_id = $2 OR d.user_id IS NULL)
        ORDER BY r.recorded_at DESC
        LIMIT 24`,
       [deviceId, req.user.id],
@@ -95,11 +109,23 @@ router.post('/ingest', async (req, res, next) => {
       return res.status(400).json({ message: 'La lectura de sensores contiene valores no válidos.' });
     }
 
+    // Asegurar que el dispositivo existe en iot_devices; si no, asociarlo automáticamente
+    const devCheck = await pool.query(
+      'SELECT device_id FROM iot_devices WHERE device_id = $1',
+      [normalizedDeviceId],
+    );
+    if (devCheck.rows.length === 0) {
+      const firstUser = await pool.query('SELECT id FROM users ORDER BY id ASC LIMIT 1');
+      const userId = firstUser.rows.length > 0 ? firstUser.rows[0].id : 1;
+      await pool.query(
+        'INSERT INTO iot_devices (device_id, user_id) VALUES ($1, $2) ON CONFLICT (device_id) DO NOTHING',
+        [normalizedDeviceId, userId],
+      );
+    }
+
     const result = await pool.query(
       `INSERT INTO iot_readings (device_id, temperature, humidity, pressure, precipitation)
-       SELECT device_id, $2, $3, $4, $5
-       FROM iot_devices
-       WHERE device_id = $1
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id, device_id AS "deviceId", temperature, humidity, pressure,
                  precipitation, recorded_at AS "recordedAt"`,
       [
@@ -110,10 +136,6 @@ router.post('/ingest', async (req, res, next) => {
         precipitation ?? null,
       ],
     );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'El dispositivo todavía no está vinculado a un usuario.' });
-    }
 
     return res.status(201).json({ reading: result.rows[0] });
   } catch (error) {

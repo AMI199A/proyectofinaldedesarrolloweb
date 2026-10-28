@@ -18,6 +18,25 @@ services:
       retries: 10
       start_period: 10s
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm
+    restart: unless-stopped
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_PORT:-8081}:8080"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   backend:
     build:
       context: ./backend
@@ -31,14 +50,21 @@ services:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/clima_app
       DATABASE_SSL: ${DATABASE_SSL:-false}
       JWT_SECRET: ${JWT_SECRET:-local-development-only-change-me}
+      KC_URL: ${KC_URL:-http://localhost:8081}
+      KC_INTERNAL_URL: ${KC_INTERNAL_URL:-http://keycloak:8080}
+      KC_REALM: ${KC_REALM:-jarvis}
+      KC_CLIENT_ID: ${KC_CLIENT_ID:-jarvis-web}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
       IOT_DEVICE_CLAIM_CODE: ${IOT_DEVICE_CLAIM_CODE:-local-device-claim}
       IOT_DEVICE_INGEST_KEY: ${IOT_DEVICE_INGEST_KEY:-local-iot-ingest}
       OPENWEATHER_BASE_URL: https://api.open-meteo.com/v1
     depends_on:
       db:
         condition: service_healthy
+      keycloak:
+        condition: service_started
     ports:
       - "${BACKEND_PORT:-4000}:4000"
     healthcheck:
@@ -60,16 +86,17 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:4000/api}
-        VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY:-}
-        VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN:-}
-        VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-}
-        VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:-}
+        VITE_KC_URL: ${VITE_KC_URL:-http://localhost:8081}
+        VITE_KC_REALM: ${VITE_KC_REALM:-jarvis}
+        VITE_KC_CLIENT_ID: ${VITE_KC_CLIENT_ID:-jarvis-web}
     restart: unless-stopped
     depends_on:
       backend:
         condition: service_healthy
       node-red:
         condition: service_healthy
+      keycloak:
+        condition: service_started
     ports:
       - "${FRONTEND_PORT:-5173}:80"
 
