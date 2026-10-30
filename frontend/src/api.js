@@ -2,21 +2,18 @@ import axios from 'axios';
 import keycloak from './keycloak';
 
 // Detección dinámica de la URL del Backend:
-// Si VITE_API_URL apunta a una IP o dominio específico, se respeta.
-// Si apunta a localhost o está vacía y el navegador accede desde una IP pública/remota (ej. Azure),
-// se deduce dinámicamente con la IP/host del cliente en el puerto 4000.
+// En producción servida por Nginx o en desarrollo con Vite proxy, se utiliza la ruta relativa '/api'.
+// Esto garantiza que todas las peticiones viajen a través del mismo puerto del Frontend (5173 / 80)
+// y Nginx las reenvíe internamente a http://backend:4000/api, evitando bloqueos por puertos cerrados
+// en el firewall / NSG de Azure (ERR_CONNECTION_TIMED_OUT en puerto 4000).
 const getApiUrl = () => {
   const envUrl = import.meta.env.VITE_API_URL;
-  if (envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')) {
-    return envUrl;
-  }
-  if (
-    typeof window !== 'undefined' &&
-    window.location.hostname &&
-    window.location.hostname !== 'localhost' &&
-    window.location.hostname !== '127.0.0.1'
-  ) {
-    return `${window.location.protocol}//${window.location.hostname}:4000/api`;
+  if (typeof window !== 'undefined') {
+    // Si se especificó explícitamente una URL remota completa que no sea localhost
+    if (envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1') && !envUrl.startsWith('/')) {
+      return envUrl;
+    }
+    return '/api';
   }
   return envUrl || 'http://localhost:4000/api';
 };
