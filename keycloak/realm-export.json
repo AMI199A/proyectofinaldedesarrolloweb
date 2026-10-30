@@ -1,0 +1,69 @@
+{
+  "id": "jarvis",
+  "realm": "jarvis",
+  "displayName": "Clima Jarvis Squad",
+  "displayNameHtml": "<b>Clima Jarvis Squad</b>",
+  "enabled": true,
+  "registrationAllowed": true,
+  "registrationEmailAsUsername": false,
+  "rememberMe": true,
+  "verifyEmail": false,
+  "resetPasswordAllowed": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "sslRequired": "external",
+  "roles": {
+    "realm": [
+      {
+        "name": "user",
+        "description": "Rol de usuario estandar",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "admin",
+        "description": "Rol de administrador del sistema",
+        "composite": false,
+        "clientRole": false
+      }
+    ]
+  },
+  "defaultRoles": [
+    "user",
+    "offline_access",
+    "uma_authorization"
+  ],
+  "clients": [
+    {
+      "clientId": "jarvis-web",
+      "name": "Jarvis Web Application",
+      "description": "Cliente publico SPA para el frontend de Clima Jarvis Squad",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": true,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000/*##http://localhost:5173/*##http://127.0.0.1:3000/*##http://127.0.0.1:5173/*"
+      },
+      "redirectUris": [
+        "http://localhost:3000/*",
+        "http://localhost:5173/*",
+        "http://127.0.0.1:3000/*",
+        "http://127.0.0.1:5173/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "+"
+      ]
+    }
+  ]
+}
+

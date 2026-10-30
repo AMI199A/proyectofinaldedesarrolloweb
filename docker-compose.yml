@@ -1,0 +1,132 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: clima_app
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d clima_app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm
+    restart: unless-stopped
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_PORT:-8081}:8080"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/clima_app
+      DATABASE_SSL: ${DATABASE_SSL:-false}
+      JWT_SECRET: ${JWT_SECRET:-local-development-only-change-me}
+      KC_URL: ${KC_URL:-http://localhost:8081}
+      KC_INTERNAL_URL: ${KC_INTERNAL_URL:-http://keycloak:8080}
+      KC_REALM: ${KC_REALM:-jarvis}
+      KC_CLIENT_ID: ${KC_CLIENT_ID:-jarvis-web}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      IOT_DEVICE_CLAIM_CODE: ${IOT_DEVICE_CLAIM_CODE:-local-device-claim}
+      IOT_DEVICE_INGEST_KEY: ${IOT_DEVICE_INGEST_KEY:-local-iot-ingest}
+      OPENWEATHER_BASE_URL: https://api.open-meteo.com/v1
+    depends_on:
+      db:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    ports:
+      - "${BACKEND_PORT:-4000}:4000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:4000/api}
+        VITE_KC_URL: ${VITE_KC_URL:-http://localhost:8081}
+        VITE_KC_REALM: ${VITE_KC_REALM:-jarvis}
+        VITE_KC_CLIENT_ID: ${VITE_KC_CLIENT_ID:-jarvis-web}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+      node-red:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+
+  node-red:
+    image: nodered/node-red:4.0.9
+    restart: unless-stopped
+    environment:
+      IOT_DEVICE_INGEST_KEY: ${IOT_DEVICE_INGEST_KEY:-local-iot-ingest}
+      BACKEND_INGEST_URL: http://backend:4000/api/iot/ingest
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${NODE_RED_PORT:-1880}:1880"
+    volumes:
+      - node_red_data:/data
+      - ./node-red/flows.json:/data/flows.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:1880/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres_data:
+  node_red_data:
