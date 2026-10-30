@@ -3,7 +3,7 @@
     "id": "iot-http-in",
     "type": "http in",
     "z": "iot-flow",
-    "name": "Telemetría ESP32",
+    "name": "Telemetría ESP32 (POST)",
     "url": "/esp32/telemetry",
     "method": "post",
     "upload": false,
@@ -17,19 +17,36 @@
     ]
   },
   {
+    "id": "iot-http-get",
+    "type": "http in",
+    "z": "iot-flow",
+    "name": "Health check (GET)",
+    "url": "/esp32/telemetry",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 180,
+    "y": 180,
+    "wires": [
+      [
+        "iot-validate"
+      ]
+    ]
+  },
+  {
     "id": "iot-validate",
     "type": "function",
     "z": "iot-flow",
     "name": "Validar y preparar lectura",
-    "func": "// 1. Obtener variables de entorno con valores por defecto seguros\nconst key = env.get('IOT_DEVICE_INGEST_KEY') || 'local-iot-ingest';\nconst backendUrl = env.get('BACKEND_INGEST_URL') || 'http://backend:4000/api/iot/ingest';\n\n// 2. Asegurar que msg.payload sea un objeto (maneja String, Buffer u Objeto)\nlet body = msg.payload;\nif (typeof body === 'string') {\n    try {\n        body = JSON.parse(body);\n    } catch (e) {\n        msg.statusCode = 400;\n        msg.headers = { 'content-type': 'application/json' };\n        msg.payload = { message: 'El cuerpo de la solicitud no es un JSON válido.' };\n        return [null, msg];\n    }\n} else if (Buffer.isBuffer(body)) {\n    try {\n        body = JSON.parse(body.toString());\n    } catch (e) {\n        msg.statusCode = 400;\n        msg.headers = { 'content-type': 'application/json' };\n        msg.payload = { message: 'El cuerpo de la solicitud no es un JSON válido.' };\n        return [null, msg];\n    }\n}\n\n// 3. Validación segura de cabecera de autenticación\nconst reqHeaders = msg.req?.headers || {};\nconst incomingKey = reqHeaders['x-device-key'] || reqHeaders['X-Device-Key'] || body?.deviceKey;\n\nif (!key || incomingKey !== key) {\n    msg.statusCode = 401;\n    msg.headers = { 'content-type': 'application/json' };\n    msg.payload = { message: 'Credencial del dispositivo inválida o ausente en el encabezado x-device-key.' };\n    return [null, msg];\n}\n\n// 4. Extracción y conversión segura a números\nconst deviceId = typeof body?.deviceId === 'string' ? body.deviceId.trim() : '';\nconst temp = (body?.temperature !== undefined && body?.temperature !== null && body?.temperature !== '') ? Number(body.temperature) : NaN;\nconst hum = (body?.humidity !== undefined && body?.humidity !== null && body?.humidity !== '') ? Number(body.humidity) : NaN;\nconst pres = (body?.pressure !== undefined && body?.pressure !== null && body?.pressure !== '') ? Number(body.pressure) : null;\nconst rain = (body?.precipitation !== undefined && body?.precipitation !== null && body?.precipitation !== '') ? Number(body.precipitation) : null;\n\n// 5. Validaciones de formato y rangos\nconst validId = /^[a-zA-Z0-9_-]{2,100}$/.test(deviceId);\nconst validTemperature = Number.isFinite(temp) && temp >= -80 && temp <= 100;\nconst validHumidity = Number.isFinite(hum) && hum >= 0 && hum <= 100;\nconst validPressure = pres === null || (Number.isFinite(pres) && pres >= 300 && pres <= 1200);\nconst validRain = rain === null || (Number.isFinite(rain) && rain >= 0 && rain <= 10000);\n\nif (!validId || !validTemperature || !validHumidity || !validPressure || !validRain) {\n    msg.statusCode = 400;\n    msg.headers = { 'content-type': 'application/json' };\n    msg.payload = { \n        message: 'La lectura de sensores contiene valores no válidos.',\n        details: { validId, validTemperature, validHumidity, validPressure, validRain }\n    };\n    return [null, msg];\n}\n\n// 6. Preparar mensaje para el nodo \"Guardar en API y PostgreSQL\" (HTTP Request)\nmsg.url = backendUrl;\nmsg.method = 'POST';\nmsg.headers = { \n    'content-type': 'application/json', \n    'x-ingest-key': key \n};\nmsg.payload = {\n    deviceId: deviceId,\n    temperature: Number(temp.toFixed(2)),\n    humidity: Number(hum.toFixed(2)),\n    pressure: pres !== null ? Number(pres.toFixed(2)) : null,\n    precipitation: rain !== null ? Number(rain.toFixed(2)) : null\n};\n\n// Salida 1: Hacia \"Guardar en API y PostgreSQL\"\n// Salida 2: null (no se activa \"Rechazar solicitud\")\nreturn [msg, null];",
+    "func": "// 1. Obtener variables de entorno con valores por defecto seguros\nconst key = env.get('IOT_DEVICE_INGEST_KEY') || 'local-iot-ingest';\nconst backendUrl = env.get('BACKEND_INGEST_URL') || 'http://backend:4000/api/iot/ingest';\n\n// 2. Health check por método GET (ej: directo desde navegador o monitoreo)\nif (msg.req && msg.req.method === 'GET') {\n    msg.statusCode = 200;\n    msg.headers = { 'content-type': 'application/json' };\n    msg.payload = { status: 'ok', service: 'node-red-telemetry', message: 'Servicio de telemetría ESP32 activo' };\n    return [null, msg];\n}\n\n// 3. Asegurar que msg.payload sea un objeto (maneja String, Buffer u Objeto)\nlet body = msg.payload;\nif (typeof body === 'string') {\n    try {\n        body = JSON.parse(body);\n    } catch (e) {\n        msg.statusCode = 400;\n        msg.headers = { 'content-type': 'application/json' };\n        msg.payload = { message: 'El cuerpo de la solicitud no es un JSON válido.' };\n        return [null, msg];\n    }\n} else if (Buffer.isBuffer(body)) {\n    try {\n        body = JSON.parse(body.toString());\n    } catch (e) {\n        msg.statusCode = 400;\n        msg.headers = { 'content-type': 'application/json' };\n        msg.payload = { message: 'El cuerpo de la solicitud no es un JSON válido.' };\n        return [null, msg];\n    }\n}\n\n// 4. Comprobación de salud / ping desde el frontend para verificar disponibilidad de Node-RED\nif (body && (body.ping === true || body.health === true)) {\n    msg.statusCode = 200;\n    msg.headers = { 'content-type': 'application/json' };\n    msg.payload = { status: 'ok', service: 'node-red-telemetry', message: 'Flujo activo' };\n    return [null, msg];\n}\n\n// 5. Validación segura de cabecera o parámetro de autenticación\nconst reqHeaders = msg.req?.headers || {};\nconst incomingKey = reqHeaders['x-device-key'] || reqHeaders['X-Device-Key'] || body?.deviceKey || msg.req?.query?.deviceKey || msg.req?.query?.key;\n\nif (!key || incomingKey !== key) {\n    msg.statusCode = 401;\n    msg.headers = { 'content-type': 'application/json' };\n    msg.payload = { message: 'Credencial del dispositivo inválida o ausente en el encabezado x-device-key.' };\n    return [null, msg];\n}\n\n// 6. Extracción y conversión segura a números\nconst deviceId = typeof body?.deviceId === 'string' ? body.deviceId.trim() : '';\nconst temp = (body?.temperature !== undefined && body?.temperature !== null && body?.temperature !== '') ? Number(body.temperature) : NaN;\nconst hum = (body?.humidity !== undefined && body?.humidity !== null && body?.humidity !== '') ? Number(body.humidity) : NaN;\nconst pres = (body?.pressure !== undefined && body?.pressure !== null && body?.pressure !== '') ? Number(body.pressure) : null;\nconst rain = (body?.precipitation !== undefined && body?.precipitation !== null && body?.precipitation !== '') ? Number(body.precipitation) : null;\n\n// 7. Validaciones de formato y rangos\nconst validId = /^[a-zA-Z0-9_-]{2,100}$/.test(deviceId);\nconst validTemperature = Number.isFinite(temp) && temp >= -80 && temp <= 100;\nconst validHumidity = Number.isFinite(hum) && hum >= 0 && hum <= 100;\nconst validPressure = pres === null || (Number.isFinite(pres) && pres >= 300 && pres <= 1200);\nconst validRain = rain === null || (Number.isFinite(rain) && rain >= 0 && rain <= 10000);\n\nif (!validId || !validTemperature || !validHumidity || !validPressure || !validRain) {\n    msg.statusCode = 400;\n    msg.headers = { 'content-type': 'application/json' };\n    msg.payload = { \n        message: 'La lectura de sensores contiene valores no válidos.',\n        details: { validId, validTemperature, validHumidity, validPressure, validRain }\n    };\n    return [null, msg];\n}\n\n// 8. Preparar mensaje para el nodo \"Guardar en API y PostgreSQL\" (HTTP Request)\nmsg.url = backendUrl;\nmsg.method = 'POST';\nmsg.headers = { \n    'content-type': 'application/json', \n    'x-ingest-key': key \n};\nmsg.payload = {\n    deviceId: deviceId,\n    temperature: Number(temp.toFixed(2)),\n    humidity: Number(hum.toFixed(2)),\n    pressure: pres !== null ? Number(pres.toFixed(2)) : null,\n    precipitation: rain !== null ? Number(rain.toFixed(2)) : null\n};\n\n// Salida 1: Hacia \"Guardar en API y PostgreSQL\"\n// Salida 2: null (no se activa \"Rechazar solicitud\")\nreturn [msg, null];",
     "outputs": 2,
     "timeout": 0,
     "noerr": 0,
     "initialize": "",
     "finalize": "",
     "libs": [],
-    "x": 410,
-    "y": 120,
+    "x": 430,
+    "y": 140,
     "wires": [
       [
         "iot-forward"
@@ -55,7 +72,7 @@
     "authType": "",
     "senderr": false,
     "headers": [],
-    "x": 690,
+    "x": 710,
     "y": 100,
     "wires": [
       [
@@ -70,7 +87,7 @@
     "name": "Responder al ESP32",
     "statusCode": "",
     "headers": {},
-    "x": 920,
+    "x": 940,
     "y": 100,
     "wires": []
   },
@@ -78,10 +95,10 @@
     "id": "iot-reject",
     "type": "http response",
     "z": "iot-flow",
-    "name": "Rechazar solicitud",
+    "name": "Responder resultado/rechazo",
     "statusCode": "",
     "headers": {},
-    "x": 690,
+    "x": 730,
     "y": 180,
     "wires": []
   },

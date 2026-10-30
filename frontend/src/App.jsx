@@ -776,8 +776,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ping: true }),
       });
-      // Si Node-RED responde (400, 401 o 200), el flujo de telemetría está activo
-      if (res.status === 400 || res.status === 401 || res.status === 200 || res.status === 201) {
+      if (res.ok) {
         setNodeRedConnected(true);
       } else {
         setNodeRedConnected(false);

@@ -11,6 +11,10 @@ export default defineConfig({
         target: 'http://localhost:4000',
         changeOrigin: true,
       },
+      '/esp32': {
+        target: 'http://localhost:1880',
+        changeOrigin: true,
+      },
     },
     watch: {
       usePolling: true,
