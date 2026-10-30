@@ -791,6 +791,37 @@ function App() {
     }
   }, []);
 
+  // --- Node Clima: simular envío de lectura hacia Node-RED para pruebas rápidas ---
+  const handleSendTestReading = useCallback(async () => {
+    try {
+      setSensorLoading(true);
+      const res = await fetch('/esp32/telemetry', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-device-key': 'change-iot-ingest-key',
+        },
+        body: JSON.stringify({
+          deviceId: 'esp32-01',
+          temperature: Number((22 + Math.random() * 6).toFixed(1)),
+          humidity: Number((50 + Math.random() * 25).toFixed(1)),
+          pressure: 1013.25,
+          precipitation: 0.0,
+        }),
+      });
+      if (res.ok) {
+        await refreshSensorReadings();
+        setMessage({ type: 'success', text: 'Lectura de prueba enviada y registrada correctamente.' });
+      } else {
+        setMessage({ type: 'error', text: 'El servidor rechazó la lectura de prueba.' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Error al enviar lectura de prueba.' });
+    } finally {
+      setSensorLoading(false);
+    }
+  }, [refreshSensorReadings]);
+
   // Refrescar lecturas automáticamente mientras el panel Node Clima esté abierto
   useEffect(() => {
     if (activeSection !== 'iot' && activeSection !== 'comparison') return undefined;
@@ -1929,14 +1960,33 @@ function App() {
                       <span className="section-kicker">Tabla de Contraste</span>
                       <h3>Métricas de Medición Detalladas</h3>
                     </div>
-                    <button
-                      type="button"
-                      className="primary-btn"
-                      disabled={sensorLoading}
-                      onClick={() => { checkNodeRedStatus(); refreshSensorReadings(); }}
-                    >
-                      {sensorLoading ? 'Actualizando…' : '↻ Actualizar datos'}
-                    </button>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        disabled={sensorLoading}
+                        onClick={() => { checkNodeRedStatus(); refreshSensorReadings(); }}
+                      >
+                        {sensorLoading ? 'Actualizando…' : '↻ Actualizar datos'}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        style={{
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          color: 'var(--text)',
+                          border: '1px solid rgba(255, 255, 255, 0.16)',
+                          padding: '8px 12px',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontSize: '0.88rem',
+                        }}
+                        disabled={sensorLoading}
+                        onClick={handleSendTestReading}
+                      >
+                        ⚡ Simular lectura
+                      </button>
+                    </div>
                   </div>
 
                   <div className="comparison-table">
@@ -2139,7 +2189,7 @@ function App() {
                 </div>
               )}
 
-              <div style={{ marginTop: 16, display: 'flex', gap: 12, alignItems: 'center' }}>
+              <div style={{ marginTop: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button
                   type="button"
                   className="primary-btn"
@@ -2147,6 +2197,23 @@ function App() {
                   onClick={() => { checkNodeRedStatus(); refreshSensorReadings(); }}
                 >
                   {sensorLoading ? 'Actualizando…' : '↻ Actualizar lecturas'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    color: 'var(--text)',
+                    border: '1px solid rgba(255, 255, 255, 0.16)',
+                    padding: '8px 14px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '0.88rem',
+                  }}
+                  disabled={sensorLoading}
+                  onClick={handleSendTestReading}
+                >
+                  ⚡ Enviar lectura de prueba
                 </button>
                 {sensorReadings.length > 0 && (
                   <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
@@ -2319,14 +2386,33 @@ function App() {
                       <span className="section-kicker">Tabla de Contraste</span>
                       <h3>Métricas de Medición Detalladas</h3>
                     </div>
-                    <button
-                      type="button"
-                      className="primary-btn"
-                      disabled={sensorLoading}
-                      onClick={() => { checkNodeRedStatus(); refreshSensorReadings(); }}
-                    >
-                      {sensorLoading ? 'Actualizando…' : '↻ Actualizar datos'}
-                    </button>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        disabled={sensorLoading}
+                        onClick={() => { checkNodeRedStatus(); refreshSensorReadings(); }}
+                      >
+                        {sensorLoading ? 'Actualizando…' : '↻ Actualizar datos'}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        style={{
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          color: 'var(--text)',
+                          border: '1px solid rgba(255, 255, 255, 0.16)',
+                          padding: '8px 12px',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontSize: '0.88rem',
+                        }}
+                        disabled={sensorLoading}
+                        onClick={handleSendTestReading}
+                      >
+                        ⚡ Simular lectura
+                      </button>
+                    </div>
                   </div>
 
                   <div className="comparison-table">

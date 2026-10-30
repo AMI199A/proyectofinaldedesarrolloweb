@@ -23,10 +23,11 @@ export const migrateAuthSchema = async () => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS iot_devices (
       device_id VARCHAR(100) PRIMARY KEY,
-      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id INT REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  await pool.query('ALTER TABLE iot_devices ALTER COLUMN user_id DROP NOT NULL').catch(() => {});
   await pool.query(`
     CREATE TABLE IF NOT EXISTS iot_readings (
       id BIGSERIAL PRIMARY KEY,
