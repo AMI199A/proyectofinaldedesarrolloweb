@@ -10,7 +10,8 @@ const char* WIFI_SSID = "TU_RED_WIFI";
 const char* WIFI_PASSWORD = "TU_CONTRASEÑA_WIFI";
 
 // ================= Configuración del Servidor y Node-RED ======
-// IP local de tu computadora en la red Wi-Fi:
+// En desarrollo local: IP local de tu PC (ej: http://192.168.0.139:5173/esp32/telemetry)
+// En Azure VM: IP pública de tu máquina virtual (ej: http://20.x.x.x:5173/esp32/telemetry)
 const char* NODE_RED_URL = "http://192.168.0.139:5173/esp32/telemetry";
 const char* DEVICE_ID = "esp32-01";
 const char* DEVICE_KEY = "change-iot-ingest-key";

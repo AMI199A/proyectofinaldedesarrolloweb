@@ -1,3 +1,4 @@
+import '../crypto-polyfill';
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import keycloak from '../keycloak';
 import { setAuthToken } from '../api';

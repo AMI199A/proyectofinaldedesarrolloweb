@@ -52,12 +52,59 @@ docker compose up --build -d
 
 *(En Windows PowerShell también puedes usar `docker-compose up --build -d`).*
 
-### 4. Accesos a los servicios
+### 4. Accesos a los servicios locales
 - **Frontend (Aplicación)**: [http://localhost:5173](http://localhost:5173) (o [http://localhost:3000](http://localhost:3000) si se mapea a ese puerto)
 - **Consola de Administración de Keycloak**: [http://localhost:8081](http://localhost:8081)
 - **API Backend (Health check)**: [http://localhost:4000/api/health](http://localhost:4000/api/health)
 - **Editor de flujos Node-RED**: [http://localhost:1880](http://localhost:1880)
 - **Base de datos PostgreSQL**: `localhost:5432`
+
+---
+
+## Despliegue en Máquina Virtual Azure (Ubuntu) con IP Pública (HTTP)
+
+### 1. Configuración de Red en Azure (Network Security Group - NSG)
+En el portal de Azure, asegúrate de que el Grupo de Seguridad de Red (NSG) asociado a tu Máquina Virtual tenga reglas de entrada (Inbound security rules) permitiendo el tráfico TCP para los siguientes puertos:
+- **Port 5173**: Frontend Web (React / Nginx)
+- **Port 4000**: Backend API (Express)
+- **Port 8081**: Keycloak SSO (Autenticación OpenID Connect)
+- **Port 1880**: Node-RED (Editor y flujos IoT)
+- **Port 22**: SSH (Acceso remoto)
+
+### 2. Preparación en la Máquina Virtual Ubuntu
+Conéctate por SSH a tu servidor Ubuntu e instala Docker y Git si aún no los tienes:
+```bash
+sudo apt update && sudo apt install -y git docker.io docker-compose-v2
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+### 3. Clonar el repositorio y configurar variables
+```bash
+git clone -b pruebas git@github.com:AMI199A/proyectofinaldedesarrolloweb.git
+cd proyectofinaldedesarrolloweb
+cp .env.example .env
+```
+Edita `.env` con la IP pública de tu máquina virtual Azure (por ejemplo, con `nano .env`):
+```env
+KC_URL=http://<IP_PUBLICA_AZURE>:8081
+FRONTEND_URL=http://<IP_PUBLICA_AZURE>:5173
+VITE_KC_URL=http://<IP_PUBLICA_AZURE>:8081
+VITE_API_URL=http://<IP_PUBLICA_AZURE>:4000/api
+```
+*(Nota: la aplicación cuenta además con detección dinámica en el navegador, por lo que si accedes desde tu IP pública, se comunicará automáticamente a los puertos 8081 y 4000 de la misma máquina).*
+
+### 4. Limpieza y Construcción Completa en Azure
+Para arrancar el stack limpio desde cero:
+```bash
+docker compose down -v && docker compose up -d --build
+```
+
+### 5. Verificación de servicios en la IP pública
+- **Frontend**: `http://<IP_PUBLICA_AZURE>:5173`
+- **Keycloak Admin**: `http://<IP_PUBLICA_AZURE>:8081/admin` (Credenciales: `admin` / `admin`)
+- **Backend Health**: `http://<IP_PUBLICA_AZURE>:4000/api/health`
+- **Node-RED**: `http://<IP_PUBLICA_AZURE>:1880`
 
 ---
 
