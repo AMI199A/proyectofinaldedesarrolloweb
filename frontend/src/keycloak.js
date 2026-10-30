@@ -1,3 +1,4 @@
+import './crypto-polyfill';
 import Keycloak from 'keycloak-js';
 
 // Detección dinámica de la URL de Keycloak:
