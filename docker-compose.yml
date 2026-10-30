@@ -26,16 +26,13 @@ services:
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
     ports:
       - "${KEYCLOAK_PORT:-8081}:8080"
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health/ready || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
 
   backend:
     build:
@@ -110,7 +107,7 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "127.0.0.1:${NODE_RED_PORT:-1880}:1880"
+      - "${NODE_RED_PORT:-1880}:1880"
     volumes:
       - node_red_data:/data
       - ./node-red/flows.json:/data/flows.json:ro

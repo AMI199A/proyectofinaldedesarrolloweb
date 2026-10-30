@@ -1,8 +1,28 @@
 import axios from 'axios';
 import keycloak from './keycloak';
 
+// Detección dinámica de la URL del Backend:
+// Si VITE_API_URL apunta a una IP o dominio específico, se respeta.
+// Si apunta a localhost o está vacía y el navegador accede desde una IP pública/remota (ej. Azure),
+// se deduce dinámicamente con la IP/host del cliente en el puerto 4000.
+const getApiUrl = () => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')) {
+    return envUrl;
+  }
+  if (
+    typeof window !== 'undefined' &&
+    window.location.hostname &&
+    window.location.hostname !== 'localhost' &&
+    window.location.hostname !== '127.0.0.1'
+  ) {
+    return `${window.location.protocol}//${window.location.hostname}:4000/api`;
+  }
+  return envUrl || 'http://localhost:4000/api';
+};
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:4000/api',
+  baseURL: getApiUrl(),
 });
 
 api.interceptors.request.use(

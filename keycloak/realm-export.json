@@ -11,7 +11,7 @@
   "resetPasswordAllowed": true,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
-  "sslRequired": "external",
+  "sslRequired": "none",
   "roles": {
     "realm": [
       {
@@ -48,22 +48,23 @@
       "fullScopeAllowed": true,
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:3000/*##http://localhost:5173/*##http://127.0.0.1:3000/*##http://127.0.0.1:5173/*"
+        "post.logout.redirect.uris": "+"
       },
       "redirectUris": [
         "http://localhost:3000/*",
         "http://localhost:5173/*",
         "http://127.0.0.1:3000/*",
-        "http://127.0.0.1:5173/*"
+        "http://127.0.0.1:5173/*",
+        "*"
       ],
       "webOrigins": [
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
-        "+"
+        "+",
+        "*"
       ]
     }
   ]
 }
-
